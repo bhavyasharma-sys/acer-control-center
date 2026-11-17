@@ -200,18 +200,24 @@ impl ControlCenter {
                 }
 
                 ui.add_space(12.0);
-                if ui.button("Apply power caps").clicked() {
+                let apply_label = if self.power_cap_applying {
+                    "Applying power caps…"
+                } else {
+                    "Apply power caps"
+                };
+                if ui
+                    .add_enabled(!self.power_cap_applying, egui::Button::new(apply_label))
+                    .clicked()
+                {
                     let [cpu_watts, gpu_watts] = self.power_profiles[profile_index];
-                    let result = libacercontrol::dbus::AcerControlDBus::new()
-                        .and_then(|bus| bus.set_power_caps(cpu_watts, gpu_watts));
-                    match result {
-                        Ok((cpu, gpu)) => {
-                            let success = cpu.starts_with("CPU cap applied")
-                                && gpu.starts_with("GPU cap applied");
-                            self.set_notice(success, format!("{cpu}. {gpu}."));
-                        }
-                        Err(error) => self.set_notice(false, format!("Could not contact the power-control daemon: {error}")),
-                    }
+                    self.power_cap_applying = true;
+                    self.set_notice(true, "Applying CPU and GPU power caps…".to_owned());
+                    let sender = self.power_cap_sender.clone();
+                    std::thread::spawn(move || {
+                        let result = libacercontrol::dbus::AcerControlDBus::new()
+                            .and_then(|bus| bus.set_power_caps(cpu_watts, gpu_watts));
+                        let _ = sender.send(result);
+                    });
                 }
                 ui.add_space(10.0);
                 ui.label(RichText::new("Caps are saved per profile. CPU limits use Intel RAPL; GPU limits use the NVIDIA driver. Each requested limit is checked against the controls your hardware exposes, and unsupported or rejected caps are reported rather than treated as applied.").color(MUTED));

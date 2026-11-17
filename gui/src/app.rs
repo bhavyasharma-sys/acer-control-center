@@ -52,6 +52,9 @@ pub(crate) struct ControlCenter {
     about_info: about::AboutInfo,
     update_sender: mpsc::Sender<Result<about::LatestRelease, String>>,
     update_receiver: mpsc::Receiver<Result<about::LatestRelease, String>>,
+    power_cap_sender: mpsc::Sender<Result<(String, String), String>>,
+    power_cap_receiver: mpsc::Receiver<Result<(String, String), String>>,
+    power_cap_applying: bool,
     update_checking: bool,
     update_status: String,
     latest_release: Option<about::LatestRelease>,
@@ -105,6 +108,7 @@ impl ControlCenter {
         .err();
         let tray_ready = background_ready;
         let (update_sender, update_receiver) = mpsc::channel();
+        let (power_cap_sender, power_cap_receiver) = mpsc::channel();
         Self {
             page: Page::Dashboard,
             brightness,
@@ -127,6 +131,9 @@ impl ControlCenter {
             about_info: about::AboutInfo::collect(),
             update_sender,
             update_receiver,
+            power_cap_sender,
+            power_cap_receiver,
+            power_cap_applying: false,
             update_checking: false,
             update_status: "Updates are checked only when you ask.".to_owned(),
             latest_release: None,
@@ -275,6 +282,20 @@ impl eframe::App for ControlCenter {
                 log::info!("Window closed; background tray service and inactivity controller remain active.");
             } else if self.idle_timeout_seconds > 0 && self.tray_ready {
                 log::info!("Window closed; inactivity controller remains active in the tray service.");
+            }
+        }
+        if let Ok(result) = self.power_cap_receiver.try_recv() {
+            self.power_cap_applying = false;
+            match result {
+                Ok((cpu, gpu)) => {
+                    let success = cpu.starts_with("CPU cap applied")
+                        && gpu.starts_with("GPU cap applied");
+                    self.set_notice(success, format!("{cpu}. {gpu}."));
+                }
+                Err(error) => self.set_notice(
+                    false,
+                    format!("Could not contact the power-control daemon: {error}"),
+                ),
             }
         }
         if let Ok(result) = self.update_receiver.try_recv() {
