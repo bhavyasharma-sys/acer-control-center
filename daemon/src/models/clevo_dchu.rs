@@ -13,6 +13,10 @@ use std::time::Duration;
 pub struct ClevoDchuBackend {
     inner: SysfsBackend,
     context: *mut ffi::AcerContext,
+    /// Serializes all ioctl calls on the shared driver context. D-Bus
+    /// handlers can run concurrently; without this lock two calls could
+    /// interleave on the same file descriptor.
+    io_lock: Mutex<()>,
     current_color: Arc<Mutex<(u8, u8, u8)>>,
     animation_running: Arc<AtomicBool>,
     saved_brightness: AtomicU8,
@@ -57,6 +61,7 @@ impl ClevoDchuBackend {
         let backend = Self {
             inner,
             context,
+            io_lock: Mutex::new(()),
             current_color: Arc::new(Mutex::new((restored.r, restored.g, restored.b))),
             animation_running: Arc::new(AtomicBool::new(false)),
             saved_brightness: AtomicU8::new(restored.brightness),
@@ -167,7 +172,15 @@ impl HardwareBackend for ClevoDchuBackend {
     }
 
     fn get_keyboard_brightness(&self) -> Result<u8, String> {
-        Ok(self.saved_brightness.load(Ordering::Relaxed))
+        // Prefer the live sysfs value so external changes (for example the
+        // firmware brightness keys handled by the kernel driver) are
+        // reflected. Fall back to the cached value when sysfs is missing.
+        // The breathing animation only animates colour, never brightness,
+        // so reading sysfs here cannot observe a half-animated value.
+        Ok(self
+            .inner
+            .get_keyboard_brightness()
+            .unwrap_or_else(|_| self.saved_brightness.load(Ordering::Relaxed)))
     }
 
     fn set_keyboard_brightness(
@@ -234,11 +247,17 @@ impl HardwareBackend for ClevoDchuBackend {
     fn get_cpu_temperature(&self) -> Result<i32, String> {
         let mut temperature: c_int = 0;
 
-        let result = unsafe {
-            ffi::acer_cpu_temperature(
-                self.context,
-                &mut temperature,
-            )
+        let result = {
+            let _guard = self
+                .io_lock
+                .lock()
+                .map_err(|_| "Failed to lock driver context".to_string())?;
+            unsafe {
+                ffi::acer_cpu_temperature(
+                    self.context,
+                    &mut temperature,
+                )
+            }
         };
 
         if result < 0 {
@@ -253,11 +272,17 @@ impl HardwareBackend for ClevoDchuBackend {
     fn get_gpu_temperature(&self) -> Result<i32, String> {
         let mut temperature: c_int = 0;
 
-        let result = unsafe {
-            ffi::acer_gpu_temperature(
-                self.context,
-                &mut temperature,
-            )
+        let result = {
+            let _guard = self
+                .io_lock
+                .lock()
+                .map_err(|_| "Failed to lock driver context".to_string())?;
+            unsafe {
+                ffi::acer_gpu_temperature(
+                    self.context,
+                    &mut temperature,
+                )
+            }
         };
 
         if result < 0 {
@@ -270,8 +295,14 @@ impl HardwareBackend for ClevoDchuBackend {
     }
 
     fn set_fan_max(&self) -> Result<(), String> {
-        let result = unsafe {
-            ffi::acer_fan_max(self.context)
+        let result = {
+            let _guard = self
+                .io_lock
+                .lock()
+                .map_err(|_| "Failed to lock driver context".to_string())?;
+            unsafe {
+                ffi::acer_fan_max(self.context)
+            }
         };
 
         if result < 0 {
@@ -285,8 +316,14 @@ impl HardwareBackend for ClevoDchuBackend {
     }
 
     fn set_fan_auto(&self) -> Result<(), String> {
-        let result = unsafe {
-            ffi::acer_fan_auto(self.context)
+        let result = {
+            let _guard = self
+                .io_lock
+                .lock()
+                .map_err(|_| "Failed to lock driver context".to_string())?;
+            unsafe {
+                ffi::acer_fan_auto(self.context)
+            }
         };
 
         if result < 0 {

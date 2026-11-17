@@ -6,8 +6,6 @@
 #include "../include/hardware.h"
 #include "../driver/include/acer_io_ioctl.h"
 
-int return_value;
-
 int acer_driver_version(
     AcerContext *ctx,
     char *buffer,

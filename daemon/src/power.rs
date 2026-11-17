@@ -322,12 +322,35 @@ fn power_info_summary(info: &NvidiaPowerInfo) -> String {
     )
 }
 
+/// Driver rejection phrases reported by `nvidia-smi --power-limit`.
+///
+/// The mobile driver on the A715-79G prints
+/// "Changing power management limit is not supported in current scope..."
+/// to stdout yet still exits with status 0, so the exit code alone must
+/// never be treated as proof that a cap was accepted. Any of these
+/// phrases in stdout or stderr means the write was rejected, even when
+/// the process exits successfully. The readback check that follows is a
+/// second line of defence: a missed phrase still fails verification.
+const REJECTION_PHRASES: &[&str] = &[
+    "not supported in current scope",
+    "power management limit is not supported",
+    "setting the power limit is not supported",
+    "not supported",
+    "failed to set",
+    "failed to change",
+    "insufficient permissions",
+    "permission denied",
+    "invalid power limit",
+    "unknown gpu",
+    "not available",
+];
+
 fn check_set_limit_output(output: &CommandOutput) -> Result<(), String> {
     let combined = format!("{}\n{}", output.stdout, output.stderr);
     let lower = combined.to_ascii_lowercase();
-    if lower.contains("not supported in current scope")
-        || lower.contains("power management limit is not supported")
-        || lower.contains("setting the power limit is not supported")
+    if REJECTION_PHRASES
+        .iter()
+        .any(|phrase| lower.contains(phrase))
     {
         return Err(format!(
             "NVIDIA driver rejected the requested power limit: {}",
@@ -598,5 +621,172 @@ mod tests {
     fn test_power_draw_conflation_prevention() {
         let info = parse_csv_power_query(&mobile_info("[N/A]", "75.00")).unwrap();
         assert!(verify_power_limit_readback(75, &info).is_err());
+    }
+
+    #[test]
+    fn test_check_set_limit_output_stderr_rejection_exit_zero() {
+        let output = result(true, "", "Changing power management limit is not supported in current scope for GPU: 00000000:01:00.0.");
+        let error = check_set_limit_output(&output).unwrap_err();
+        assert!(error.contains("driver rejected"));
+    }
+
+    #[test]
+    fn test_check_set_limit_output_generic_failure_phrases() {
+        for text in [
+            "Failed to set power limit for GPU 0.",
+            "Failed to change power management limit.",
+            "Insufficient Permissions to set power limit.",
+            "Power limit is not supported on this GPU.",
+        ] {
+            let output = result(true, text, "");
+            assert!(
+                check_set_limit_output(&output).is_err(),
+                "expected rejection for: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_set_limit_output_empty_success() {
+        assert!(check_set_limit_output(&result(true, "", "")).is_ok());
+        assert!(check_set_limit_output(&result(true, "\n", "\n")).is_ok());
+    }
+
+    #[test]
+    fn test_parse_optional_watts_variants() {
+        assert_eq!(parse_optional_watts("70.00"), Some(70.0));
+        assert_eq!(parse_optional_watts("70.00 W"), Some(70.0));
+        assert_eq!(parse_optional_watts("[70.00]"), Some(70.0));
+        assert_eq!(parse_optional_watts("N/A"), None);
+        assert_eq!(parse_optional_watts("[N/A]"), None);
+        assert_eq!(parse_optional_watts("Not Supported"), None);
+        assert_eq!(parse_optional_watts("Not Available"), None);
+        assert_eq!(parse_optional_watts(""), None);
+        assert_eq!(parse_optional_watts("   "), None);
+        assert_eq!(parse_optional_watts("garbage"), None);
+    }
+
+    #[test]
+    fn test_power_info_summary_keeps_fields_separate() {
+        let info = parse_csv_power_query(&mobile_info("[N/A]", "6.51")).unwrap();
+        let summary = power_info_summary(&info);
+        assert!(summary.contains("base limit 60.00 W"));
+        assert!(summary.contains("enforced ceiling 70.00 W"));
+        assert!(summary.contains("software-requested limit N/A"));
+        assert!(summary.contains("NVIDIA-reported maximum limit 75.00 W"));
+        assert!(summary.contains("live draw 6.51 W"));
+        // The reported maximum must never be labelled a Dynamic Boost ceiling.
+        assert!(!summary.to_ascii_lowercase().contains("dynamic boost"));
+    }
+
+    #[test]
+    fn test_parse_detailed_software_requested_label() {
+        let text = "Power Readings\n    Power Draw : 45.20 W\n    Enforced Power Limit : 200.00 W\n    Software Requested Power Limit : 180.00 W\n    Default Power Limit : 200.00 W\n";
+        let info = parse_detailed_power_query(text).unwrap();
+        assert_eq!(info.software_requested_limit_w, Some(180.0));
+        assert_eq!(info.enforced_limit_w, Some(200.0));
+    }
+
+    #[test]
+    fn test_parse_detailed_current_limit_does_not_override_enforced() {
+        let text = "Power Readings\n    Current Power Limit : 70.00 W\n    Enforced Power Limit : 75.00 W\n    Power Draw : 6.51 W\n";
+        let info = parse_detailed_power_query(text).unwrap();
+        assert_eq!(info.enforced_limit_w, Some(75.0));
+    }
+
+    #[test]
+    fn test_enforced_ceiling_is_not_proof_of_cap() {
+        // Enforced ceiling happens to equal the request, but no numeric
+        // software-requested limit was exposed: must still fail.
+        let info = NvidiaPowerInfo {
+            enforced_limit_w: Some(75.0),
+            software_requested_limit_w: None,
+            ..Default::default()
+        };
+        assert!(verify_power_limit_readback(75, &info).is_err());
+    }
+
+    #[test]
+    fn test_max_limit_is_not_proof_of_cap() {
+        let info = NvidiaPowerInfo {
+            max_limit_w: Some(75.0),
+            software_requested_limit_w: None,
+            ..Default::default()
+        };
+        assert!(verify_power_limit_readback(75, &info).is_err());
+    }
+
+    #[test]
+    fn test_readback_tolerance() {
+        let info = NvidiaPowerInfo {
+            software_requested_limit_w: Some(75.4),
+            ..Default::default()
+        };
+        assert!(verify_power_limit_readback(75, &info).is_ok());
+        let info = NvidiaPowerInfo {
+            software_requested_limit_w: Some(75.6),
+            ..Default::default()
+        };
+        assert!(verify_power_limit_readback(75, &info).is_err());
+    }
+
+    #[test]
+    fn test_set_gpu_rejects_out_of_range_before_querying() {
+        let mock = MockExecutor::new([]);
+        assert!(set_gpu_power_cap_with_executor(0, &mock).is_err());
+        assert!(set_gpu_power_cap_with_executor(501, &mock).is_err());
+        assert_eq!(mock.calls().len(), 0);
+    }
+
+    #[test]
+    fn test_set_gpu_rejects_above_nvidia_max_without_writing() {
+        let mock = MockExecutor::new([query_result("[N/A]", "6.51")]);
+        let error = set_gpu_power_cap_with_executor(100, &mock).unwrap_err();
+        assert!(error.contains("exceeds the NVIDIA-supported maximum"));
+        // Only the pre-query ran; no --power-limit write was attempted.
+        assert_eq!(mock.calls().len(), 1);
+    }
+
+    #[test]
+    fn test_executed_command_sequence_for_a_successful_apply() {
+        // End-to-end argv check: pre-query, then exactly one --power-limit
+        // write with the requested wattage, then the readback query.
+        let mock = MockExecutor::new([
+            query_result("[N/A]", "6.51"),
+            result(true, "", ""),
+            query_result("45.00", "30.10"),
+        ]);
+        let detail = set_gpu_power_cap_with_executor(45, &mock).unwrap();
+        assert!(detail.contains("software-requested limit 45.00 W"));
+        let calls = mock.calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0], build_query_power_args());
+        assert_eq!(calls[1], build_set_power_limit_args(45));
+        assert_eq!(calls[2], build_query_power_args());
+        // The write must carry the requested value, never the enforced
+        // ceiling or the reported maximum.
+        assert_eq!(calls[1].last().map(String::as_str), Some("45"));
+    }
+
+    #[test]
+    fn test_rejected_apply_still_reports_the_requested_target() {
+        // The 75 W Performance target stays in the error text so the user can
+        // see what was asked for and why the driver refused it.
+        let mock = MockExecutor::new([
+            query_result("[N/A]", "6.51"),
+            result(
+                true,
+                "Changing power management limit is not supported in current scope for GPU: 00000000:01:00.0.",
+                "",
+            ),
+        ]);
+        let error = set_gpu_power_cap_with_executor(75, &mock).unwrap_err();
+        assert!(error.contains("not supported in current scope"));
+        assert!(error.contains("NVIDIA-reported maximum limit 75.00 W"));
+        assert!(error.contains("enforced ceiling 70.00 W"));
+        assert!(error.contains("base limit 60.00 W"));
+        assert!(error.contains("live draw 6.51 W"));
+        // No readback query is performed after a rejected write.
+        assert_eq!(mock.calls().len(), 2);
     }
 }
