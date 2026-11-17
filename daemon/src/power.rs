@@ -23,19 +23,31 @@ fn write_rapl_constraint(path: &Path, watts: u32) -> Result<(), String> {
 
     if let Ok(value) = fs::read_to_string(&min_path) {
         let min = value.trim().parse::<u64>().map_err(|e| e.to_string())?;
-        if requested < min {
+        if min > 0 && requested < min {
             return Err(format!("CPU cap is below this RAPL constraint minimum ({:.1} W)", min as f64 / MICROWATTS_PER_WATT as f64));
         }
     }
     if let Ok(value) = fs::read_to_string(&max_path) {
         let max = value.trim().parse::<u64>().map_err(|e| e.to_string())?;
-        if requested > max {
+        if max > 0 && requested > max {
             return Err(format!("CPU cap exceeds this RAPL constraint maximum ({:.1} W)", max as f64 / MICROWATTS_PER_WATT as f64));
         }
     }
 
     fs::write(path, requested.to_string())
-        .map_err(|e| format!("Could not write {}: {e}", path.display()))
+        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    let actual = fs::read_to_string(path)
+        .map_err(|e| format!("Could not verify {}: {e}", path.display()))?
+        .trim()
+        .parse::<u64>()
+        .map_err(|e| format!("Could not parse the value read back from {}: {e}", path.display()))?;
+    if actual != requested {
+        return Err(format!(
+            "RAPL read back {:.1} W instead of the requested {watts} W",
+            actual as f64 / MICROWATTS_PER_WATT as f64
+        ));
+    }
+    Ok(())
 }
 
 fn rapl_package_dirs() -> Result<Vec<PathBuf>, String> {
@@ -98,7 +110,7 @@ pub fn set_cpu_power_cap(watts: u32) -> Result<(), String> {
 
     for (index, path) in limits.iter().enumerate() {
         if let Err(error) = write_rapl_constraint(path, watts) {
-            for rollback_index in (0..index).rev() {
+            for rollback_index in (0..=index).rev() {
                 let _ = fs::write(&limits[rollback_index], old_values[rollback_index].trim());
             }
             return Err(error);
@@ -140,6 +152,31 @@ fn nvidia_power_range() -> Result<(f64, f64), String> {
     Ok((min, max))
 }
 
+fn nvidia_current_power_limit() -> Result<f64, String> {
+    let output = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=power.limit",
+            "--format=csv,noheader,nounits",
+            "-i",
+            "0",
+        ])
+        .output()
+        .map_err(|e| format!("Could not query the NVIDIA power limit: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Could not read back the NVIDIA power limit: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .ok_or_else(|| "nvidia-smi returned no current power limit".to_string())?
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "NVIDIA driver does not report a numeric current power limit".into())
+}
+
 pub fn set_gpu_power_cap(watts: u32) -> Result<(), String> {
     if !(1..=500).contains(&watts) {
         return Err("GPU cap must be between 1 and 500 W".into());
@@ -155,12 +192,18 @@ pub fn set_gpu_power_cap(watts: u32) -> Result<(), String> {
         .arg(watts_arg)
         .output()
         .map_err(|e| format!("Could not run nvidia-smi: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
+    if !output.status.success() {
+        return Err(format!(
             "NVIDIA GPU rejected the power limit: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        ));
     }
+
+    let actual = nvidia_current_power_limit()?;
+    if (actual - f64::from(watts)).abs() > 0.5 {
+        return Err(format!(
+            "NVIDIA accepted the command but reports a current limit of {actual:.0} W, not the requested {watts} W"
+        ));
+    }
+    Ok(())
 }
