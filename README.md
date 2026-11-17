@@ -198,6 +198,31 @@ A kernel taint caused by a correctly signed out-of-tree module does not mean tha
 
 Removing this particular taint would require the driver to become an upstream/in-tree Linux kernel driver. The taint should not be manually cleared because it is a diagnostic state maintained by the kernel.
 
+## Browser frontend (no compile needed)
+
+Alongside the native egui application there is a dependency-free browser
+frontend under `webgui/`. It is plain Python (standard library only) plus
+HTML/CSS/JS: a small HTTP server serves the page and proxies hardware calls to
+`acer-control-daemon` over the system D-Bus using `busctl`, and reads telemetry
+straight from `/proc` and `/sys`. Nothing is compiled, so it runs anywhere
+Python 3.9+ runs.
+
+```bash
+python3 -m webgui.acercontrol            # http://127.0.0.1:8765
+python3 -m webgui.acercontrol --port 9000
+python3 -m webgui.acercontrol --host 0.0.0.0   # share on the LAN
+```
+
+Open the printed address in any browser. When the daemon is not on the bus the
+page still renders and shows a banner; telemetry keeps working because it does
+not depend on the daemon.
+
+Run the backend tests (they stub `busctl`, so no hardware is needed):
+
+```bash
+python3 -m unittest discover -s webgui/tests -v
+```
+
 ## Uninstall
 
 ```bash
