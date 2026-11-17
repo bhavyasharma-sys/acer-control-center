@@ -198,6 +198,35 @@ A kernel taint caused by a correctly signed out-of-tree module does not mean tha
 
 Removing this particular taint would require the driver to become an upstream/in-tree Linux kernel driver. The taint should not be manually cleared because it is a diagnostic state maintained by the kernel.
 
+## Desktop app (recommended)
+
+A native window built with pygame over the same Python backend as the browser
+frontend: one pip package, no compilation, no system libraries beyond what
+pygame wheels bundle.
+
+```bash
+pip install pygame
+python3 -m desktopgui                 # opens a 1280x800 window
+python3 -m desktopgui --size 1000x700
+```
+
+Tabs switch with the mouse or keys 1-6; Esc or Q quits. Hardware calls go to
+acer-control-daemon over the system D-Bus via busctl; telemetry comes from
+/proc and /sys. When the daemon is absent the window still opens and shows a
+banner.
+
+The UI can render without a display, which is how it is tested in CI-less
+sandboxes and how you can capture every tab yourself:
+
+```bash
+SDL_VIDEODRIVER=dummy python3 -m desktopgui --screenshot /tmp/shots
+SDL_VIDEODRIVER=dummy python3 -m unittest discover -s desktopgui/tests -v
+```
+
+The test suite drives synthetic mouse and keyboard events through the real
+event path against a fake busctl, and asserts that no card ever overlaps or
+clips on any tab.
+
 ## Browser frontend (no compile needed)
 
 Alongside the native egui application there is a dependency-free browser
