@@ -30,7 +30,7 @@ fi
 install_packages() {
     if [[ -f /etc/arch-release ]]; then
         pacman -Sy --noconfirm
-        pacman -S --needed --noconfirm git gcc make dkms linux-headers mokutil openssl base-devel meson ninja rust cargo rustup curl ca-certificates pkgconf libx11 libxkbcommon wayland
+        pacman -S --needed --noconfirm git gcc make dkms linux-headers mokutil openssl base-devel meson ninja rustup curl ca-certificates pkgconf libx11 libxkbcommon wayland
     elif [[ -f /etc/debian_version ]]; then
         apt update
         apt install -y git gcc g++ make dkms mokutil openssl curl ca-certificates build-essential linux-headers-"$KERNEL_VERSION" meson ninja-build cargo rustc pkg-config libx11-dev libxkbcommon-dev libwayland-dev
