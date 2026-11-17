@@ -10,25 +10,32 @@ fn state_path() -> Result<PathBuf, String> {
     Ok(config.join("acer-control-center").join("power-profiles"))
 }
 
-pub fn load() -> ([[u32; 2]; 3], usize) {
-    let Ok(path) = state_path() else { return (DEFAULTS, 0) };
-    let Ok(contents) = std::fs::read_to_string(path) else { return (DEFAULTS, 0) };
-    let values: Result<Vec<u32>, _> = contents.split_whitespace().map(str::parse).collect();
-    let Ok(values) = values else { return (DEFAULTS, 0) };
+fn parse_profile_contents(contents: &str) -> Option<([[u32; 2]; 3], usize)> {
+    let values: Vec<u32> = contents
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
     if values.len() != 7
         || values[..6].iter().any(|value| *value == 0 || *value > 500)
         || values[6] > 2
     {
-        return (DEFAULTS, 0);
+        return None;
     }
-    (
+    Some((
         [
             [values[0], values[1]],
             [values[2], values[3]],
             [values[4], values[5]],
         ],
         values[6] as usize,
-    )
+    ))
+}
+
+pub fn load() -> ([[u32; 2]; 3], usize) {
+    let Ok(path) = state_path() else { return (DEFAULTS, 0) };
+    let Ok(contents) = std::fs::read_to_string(path) else { return (DEFAULTS, 0) };
+    parse_profile_contents(&contents).unwrap_or((DEFAULTS, 0))
 }
 
 pub fn save(caps: [[u32; 2]; 3], selected: usize) -> Result<(), String> {
@@ -44,4 +51,29 @@ pub fn save(caps: [[u32; 2]; 3], selected: usize) -> Result<(), String> {
     let temporary = path.with_extension("tmp");
     std::fs::write(&temporary, contents).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, &path).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_profile_defaults() {
+        assert_eq!(DEFAULTS, [[40, 75], [30, 60], [15, 30]]);
+    }
+
+    #[test]
+    fn test_parse_profile_contents() {
+        assert_eq!(
+            parse_profile_contents("40 75 30 60 15 30 2"),
+            Some(([[40, 75], [30, 60], [15, 30]], 2))
+        );
+    }
+
+    #[test]
+    fn test_invalid_profile_contents_falls_back() {
+        assert!(parse_profile_contents("40 75 30 60 15 30 4").is_none());
+        assert!(parse_profile_contents("40 75 30 60 15 0 0").is_none());
+        assert!(parse_profile_contents("not a profile").is_none());
+    }
 }

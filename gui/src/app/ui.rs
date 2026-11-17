@@ -226,6 +226,10 @@ impl ControlCenter {
                             .suffix(" W"),
                     ).changed();
                 });
+                if ui.button("Reset profile defaults").clicked() {
+                    self.power_profiles[profile_index] = super::power_profiles::DEFAULTS[profile_index];
+                    changed = true;
+                }
                 if changed {
                     if let Err(error) = super::power_profiles::save(self.power_profiles, profile_index) {
                         self.set_notice(false, format!("Could not save power limits: {error}"));
@@ -253,7 +257,7 @@ impl ControlCenter {
                     });
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("Caps are saved per profile. CPU values are written to Intel RAPL and read back; this does not measure workload power or prove firmware enforcement. GPU values are verified against the NVIDIA driver's reported current limit. Laptop firmware and Dynamic Boost may constrain or override requested values.").color(MUTED));
+                ui.label(RichText::new("Caps are saved per profile. CPU values are written to Intel RAPL and read back; this does not measure workload power or prove firmware enforcement. GPU success requires NVIDIA's software-requested limit to match. An enforced ceiling or live power draw is reported separately and is not proof the requested cap was set; firmware and Dynamic Boost can still constrain actual power.").color(MUTED));
             }
             Page::Battery => { ui.label(RichText::new("Battery charge management is planned for a future release.").color(MUTED)); }
             Page::Settings => {

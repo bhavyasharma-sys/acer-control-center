@@ -67,7 +67,7 @@ impl AcerService {
             .map(|()| format!("CPU RAPL setting read back: {cpu_watts} W (actual workload enforcement is not measured)"))
             .unwrap_or_else(|error| format!("CPU cap not applied: {error}"));
         let gpu = self.backend.set_gpu_power_cap(gpu_watts)
-            .map(|()| format!("NVIDIA current limit verified: {gpu_watts} W"))
+            .map(|detail| format!("NVIDIA software-requested limit read back: {gpu_watts} W; {detail}"))
             .unwrap_or_else(|error| format!("GPU cap not applied: {error}"));
         (cpu, gpu)
     }

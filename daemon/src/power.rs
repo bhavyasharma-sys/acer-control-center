@@ -119,86 +119,484 @@ pub fn set_cpu_power_cap(watts: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn nvidia_power_range() -> Result<(f64, f64), String> {
-    let output = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=power.min_limit,power.max_limit",
-            "--format=csv,noheader,nounits",
-            "-i",
-            "0",
-        ])
-        .output()
-        .map_err(|e| format!("Could not run nvidia-smi: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Could not query NVIDIA power limits: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let Some(line) = text.lines().next() else {
-        return Err("nvidia-smi returned no GPU power-limit information".into());
-    };
-    let values: Vec<_> = line.split(',').map(str::trim).collect();
-    if values.len() != 2 {
-        return Err("nvidia-smi returned an unexpected power-limit format".into());
-    }
-    let min = values[0]
-        .parse::<f64>()
-        .map_err(|_| "NVIDIA driver does not expose a configurable minimum power limit".to_string())?;
-    let max = values[1]
-        .parse::<f64>()
-        .map_err(|_| "NVIDIA driver does not expose a configurable maximum power limit".to_string())?;
-    Ok((min, max))
+#[derive(Clone, Debug, Default, PartialEq)]
+struct NvidiaPowerInfo {
+    min_limit_w: Option<f64>,
+    max_limit_w: Option<f64>,
+    default_limit_w: Option<f64>,
+    enforced_limit_w: Option<f64>,
+    software_requested_limit_w: Option<f64>,
+    power_draw_w: Option<f64>,
 }
 
-fn nvidia_current_power_limit() -> Result<f64, String> {
-    let output = Command::new("nvidia-smi")
-        .args(["-q", "-d", "POWER", "-i", "0"])
-        .output()
-        .map_err(|e| format!("Could not query the NVIDIA power limit: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Could not read back the NVIDIA power limit: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+#[derive(Clone, Debug)]
+struct CommandOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+trait CommandExecutor {
+    fn execute(&self, args: &[String]) -> Result<CommandOutput, String>;
+}
+
+struct SystemCommandExecutor;
+
+impl CommandExecutor for SystemCommandExecutor {
+    fn execute(&self, args: &[String]) -> Result<CommandOutput, String> {
+        let output = Command::new("nvidia-smi")
+            .args(args)
+            .output()
+            .map_err(|error| format!("Could not run nvidia-smi: {error}"))?;
+        Ok(CommandOutput {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
     }
-    String::from_utf8_lossy(&output.stdout)
+}
+
+fn build_query_power_args() -> Vec<String> {
+    [
+        "--query-gpu=power.min_limit,power.max_limit,power.default_limit,enforced.power.limit,power.limit,power.draw",
+        "--format=csv,noheader,nounits",
+        "-i",
+        "0",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn build_detailed_power_args() -> Vec<String> {
+    ["-q", "-d", "POWER", "-i", "0"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn build_set_power_limit_args(watts: u32) -> Vec<String> {
+    vec![
+        "-i".into(),
+        "0".into(),
+        "--power-limit".into(),
+        watts.to_string(),
+    ]
+}
+
+fn parse_optional_watts(value: &str) -> Option<f64> {
+    let value = value.trim().trim_matches(|character| character == '[' || character == ']').trim();
+    if value.is_empty()
+        || value.eq_ignore_ascii_case("N/A")
+        || value.eq_ignore_ascii_case("Not Supported")
+        || value.eq_ignore_ascii_case("Not Available")
+    {
+        return None;
+    }
+    value
+        .split_whitespace()
+        .next()
+        .and_then(|number| number.parse::<f64>().ok())
+}
+
+fn parse_csv_power_query(text: &str) -> Result<NvidiaPowerInfo, String> {
+    let line = text
         .lines()
-        .find(|line| line.contains("Current Power Limit"))
-        .and_then(|line| line.split_once(':').map(|(_, value)| value.trim().to_string()))
-        .and_then(|value| value.split_whitespace().next().map(str::to_owned))
-        .and_then(|value| value.parse::<f64>().ok())
-        .ok_or_else(|| "NVIDIA query did not report a numeric Current Power Limit".into())
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| "nvidia-smi returned no GPU power information".to_string())?;
+    let values: Vec<_> = line.split(',').map(str::trim).collect();
+    if values.len() != 6 {
+        return Err(format!(
+            "nvidia-smi returned {} power fields; expected 6",
+            values.len()
+        ));
+    }
+    let parse = |index| parse_optional_watts(values[index]);
+    Ok(NvidiaPowerInfo {
+        min_limit_w: parse(0),
+        max_limit_w: parse(1),
+        default_limit_w: parse(2),
+        enforced_limit_w: parse(3),
+        software_requested_limit_w: parse(4),
+        power_draw_w: parse(5),
+    })
 }
 
-pub fn set_gpu_power_cap(watts: u32) -> Result<(), String> {
+fn parse_detailed_power_query(text: &str) -> Result<NvidiaPowerInfo, String> {
+    let mut info = NvidiaPowerInfo::default();
+    let mut found_power_field = false;
+    for line in text.lines() {
+        let Some((label, value)) = line.split_once(':') else {
+            continue;
+        };
+        let watts = parse_optional_watts(value);
+        match label.trim().to_ascii_lowercase().as_str() {
+            "min power limit" => {
+                info.min_limit_w = watts;
+                found_power_field = true;
+            }
+            "max power limit" => {
+                info.max_limit_w = watts;
+                found_power_field = true;
+            }
+            "default power limit" => {
+                info.default_limit_w = watts;
+                found_power_field = true;
+            }
+            "enforced power limit" => {
+                info.enforced_limit_w = watts;
+                found_power_field = true;
+            }
+            "current power limit" => {
+                // Older drivers expose only the current ceiling under this name.
+                if info.enforced_limit_w.is_none() {
+                    info.enforced_limit_w = watts;
+                }
+                found_power_field = true;
+            }
+            "requested power limit" | "software requested power limit" => {
+                info.software_requested_limit_w = watts;
+                found_power_field = true;
+            }
+            "power draw" | "average power draw" => {
+                info.power_draw_w = watts;
+                found_power_field = true;
+            }
+            _ => {}
+        }
+    }
+    if !found_power_field {
+        return Err("NVIDIA detailed query contained no recognizable power fields".into());
+    }
+    Ok(info)
+}
+
+fn query_nvidia_power_info(executor: &impl CommandExecutor) -> Result<NvidiaPowerInfo, String> {
+    let csv_result = executor.execute(&build_query_power_args());
+    if let Ok(output) = &csv_result {
+        if output.success {
+            if let Ok(info) = parse_csv_power_query(&output.stdout) {
+                return Ok(info);
+            }
+        }
+    }
+
+    let details = executor.execute(&build_detailed_power_args())?;
+    if !details.success {
+        let csv_error = match csv_result {
+            Ok(output) => {
+                let detail = if output.stderr.trim().is_empty() {
+                    output.stdout.trim()
+                } else {
+                    output.stderr.trim()
+                };
+                format!("CSV query failed: {detail}")
+            }
+            Err(error) => error,
+        };
+        return Err(format!(
+            "Could not query NVIDIA power information ({csv_error}; detailed query: {})",
+            if details.stderr.trim().is_empty() {
+                details.stdout.trim()
+            } else {
+                details.stderr.trim()
+            }
+        ));
+    }
+    parse_detailed_power_query(&details.stdout)
+}
+
+fn power_info_summary(info: &NvidiaPowerInfo) -> String {
+    fn show(value: Option<f64>) -> String {
+        value
+            .map(|watts| format!("{watts:.2} W"))
+            .unwrap_or_else(|| "N/A".into())
+    }
+    format!(
+        "base limit {}, enforced ceiling {}, software-requested limit {}, NVIDIA-reported maximum limit {}, live draw {}",
+        show(info.default_limit_w),
+        show(info.enforced_limit_w),
+        show(info.software_requested_limit_w),
+        show(info.max_limit_w),
+        show(info.power_draw_w),
+    )
+}
+
+fn check_set_limit_output(output: &CommandOutput) -> Result<(), String> {
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    let lower = combined.to_ascii_lowercase();
+    if lower.contains("not supported in current scope")
+        || lower.contains("power management limit is not supported")
+        || lower.contains("setting the power limit is not supported")
+    {
+        return Err(format!(
+            "NVIDIA driver rejected the requested power limit: {}",
+            combined.trim()
+        ));
+    }
+    if !output.success {
+        let detail = if output.stderr.trim().is_empty() {
+            output.stdout.trim()
+        } else {
+            output.stderr.trim()
+        };
+        return Err(format!("NVIDIA GPU rejected the power limit: {detail}"));
+    }
+    Ok(())
+}
+
+fn validate_nvidia_watts(watts: u32, info: &NvidiaPowerInfo) -> Result<(), String> {
     if !(1..=500).contains(&watts) {
         return Err("GPU cap must be between 1 and 500 W".into());
     }
-    let (min, max) = nvidia_power_range()?;
-    if f64::from(watts) < min || f64::from(watts) > max {
-        return Err(format!("GPU cap is outside the NVIDIA-supported range ({min:.0}–{max:.0} W)"));
+    if let Some(min) = info.min_limit_w {
+        if f64::from(watts) < min {
+            return Err(format!("GPU cap is below the NVIDIA-supported minimum ({min:.2} W)"));
+        }
     }
+    if let Some(max) = info.max_limit_w {
+        if f64::from(watts) > max {
+            return Err(format!("GPU cap exceeds the NVIDIA-supported maximum ({max:.2} W)"));
+        }
+    }
+    Ok(())
+}
 
-    let watts_arg = watts.to_string();
-    let output = Command::new("nvidia-smi")
-        .args(["-i", "0", "--power-limit"])
-        .arg(watts_arg)
-        .output()
-        .map_err(|e| format!("Could not run nvidia-smi: {e}"))?;
-    if !output.status.success() {
+fn verify_power_limit_readback(watts: u32, info: &NvidiaPowerInfo) -> Result<(), String> {
+    let Some(requested) = info.software_requested_limit_w else {
         return Err(format!(
-            "NVIDIA GPU rejected the power limit: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "NVIDIA did not expose a numeric software-requested power limit; an enforced ceiling or live draw is not proof that the cap was set ({})",
+            power_info_summary(info)
         ));
-    }
-
-    let actual = nvidia_current_power_limit()?;
-    if (actual - f64::from(watts)).abs() > 0.5 {
+    };
+    if (requested - f64::from(watts)).abs() > 0.5 {
         return Err(format!(
-            "NVIDIA accepted the command but reports a current limit of {actual:.0} W, not the requested {watts} W"
+            "NVIDIA software-requested limit read back as {requested:.2} W, not {watts} W ({})",
+            power_info_summary(info)
         ));
     }
     Ok(())
+}
+
+fn set_gpu_power_cap_with_executor(
+    watts: u32,
+    executor: &impl CommandExecutor,
+) -> Result<String, String> {
+    if !(1..=500).contains(&watts) {
+        return Err("GPU cap must be between 1 and 500 W".into());
+    }
+    let before = query_nvidia_power_info(executor)?;
+    validate_nvidia_watts(watts, &before)?;
+
+    let output = executor.execute(&build_set_power_limit_args(watts))?;
+    if let Err(error) = check_set_limit_output(&output) {
+        return Err(format!("{error} Current NVIDIA state: {}.", power_info_summary(&before)));
+    }
+
+    let after = query_nvidia_power_info(executor)?;
+    verify_power_limit_readback(watts, &after).map_err(|error| {
+        format!("{error}. Current NVIDIA state: {}.", power_info_summary(&after))
+    })?;
+    Ok(format!("{}", power_info_summary(&after)))
+}
+
+pub fn set_gpu_power_cap(watts: u32) -> Result<String, String> {
+    set_gpu_power_cap_with_executor(watts, &SystemCommandExecutor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    struct MockExecutor {
+        outputs: Mutex<VecDeque<Result<CommandOutput, String>>>,
+        calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl MockExecutor {
+        fn new(outputs: impl IntoIterator<Item = CommandOutput>) -> Self {
+            Self {
+                outputs: Mutex::new(outputs.into_iter().map(Ok).collect()),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl CommandExecutor for MockExecutor {
+        fn execute(&self, args: &[String]) -> Result<CommandOutput, String> {
+            self.calls.lock().unwrap().push(args.to_vec());
+            self.outputs.lock().unwrap().pop_front().unwrap_or_else(|| {
+                Err("mock executor has no response left".into())
+            })
+        }
+    }
+
+    fn result(success: bool, stdout: &str, stderr: &str) -> CommandOutput {
+        CommandOutput {
+            success,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
+    fn mobile_info(requested: &str, draw: &str) -> String {
+        format!("1.00, 75.00, 60.00, 70.00, {requested}, {draw}\n")
+    }
+
+    fn query_result(requested: &str, draw: &str) -> CommandOutput {
+        result(true, &mobile_info(requested, draw), "")
+    }
+
+    #[test]
+    fn test_build_query_power_args() {
+        assert_eq!(build_query_power_args(), vec![
+            "--query-gpu=power.min_limit,power.max_limit,power.default_limit,enforced.power.limit,power.limit,power.draw".to_owned(),
+            "--format=csv,noheader,nounits".to_owned(), "-i".to_owned(), "0".to_owned()
+        ]);
+    }
+
+    #[test]
+    fn test_build_detailed_power_args() {
+        assert_eq!(
+            build_detailed_power_args(),
+            vec!["-q".to_owned(), "-d".to_owned(), "POWER".to_owned(), "-i".to_owned(), "0".to_owned()]
+        );
+    }
+
+    #[test]
+    fn test_build_set_power_limit_args() {
+        assert_eq!(
+            build_set_power_limit_args(75),
+            vec!["-i".to_owned(), "0".to_owned(), "--power-limit".to_owned(), "75".to_owned()]
+        );
+    }
+
+    #[test]
+    fn test_parse_csv_power_query_mobile() {
+        let info = parse_csv_power_query(&mobile_info("[N/A]", "6.51")).unwrap();
+        assert_eq!(info.min_limit_w, Some(1.0));
+        assert_eq!(info.max_limit_w, Some(75.0));
+        assert_eq!(info.default_limit_w, Some(60.0));
+        assert_eq!(info.enforced_limit_w, Some(70.0));
+        assert_eq!(info.software_requested_limit_w, None);
+        assert_eq!(info.power_draw_w, Some(6.51));
+    }
+
+    #[test]
+    fn test_parse_csv_power_query_desktop() {
+        let info = parse_csv_power_query("50.00, 250.00, 200.00, 200.00, 180.00, 45.20\n").unwrap();
+        assert_eq!(info.software_requested_limit_w, Some(180.0));
+        assert_eq!(info.power_draw_w, Some(45.2));
+    }
+
+    #[test]
+    fn test_parse_csv_power_query_malformed() {
+        assert!(parse_csv_power_query("1, 75, 60\n").is_err());
+        assert!(parse_csv_power_query("\n").is_err());
+    }
+
+    #[test]
+    fn test_parse_detailed_power_query() {
+        let text = "Power Readings\n    Power Draw : 6.51 W\n    Current Power Limit : 70.00 W\n    Requested Power Limit : [N/A]\n    Default Power Limit : 60.00 W\n    Min Power Limit : 1.00 W\n    Max Power Limit : 75.00 W\n    Enforced Power Limit : 70.00 W\n";
+        let info = parse_detailed_power_query(text).unwrap();
+        assert_eq!(info.power_draw_w, Some(6.51));
+        assert_eq!(info.enforced_limit_w, Some(70.0));
+        assert_eq!(info.software_requested_limit_w, None);
+        assert_eq!(info.default_limit_w, Some(60.0));
+        assert_eq!(info.max_limit_w, Some(75.0));
+    }
+
+    #[test]
+    fn test_power_query_falls_back_to_detailed_format() {
+        let detailed = "Power Readings\n  Default Power Limit : 60.00 W\n  Enforced Power Limit : 70.00 W\n  Requested Power Limit : [N/A]\n  Max Power Limit : 75.00 W\n  Power Draw : 6.51 W\n";
+        let mock = MockExecutor::new([
+            result(false, "", "Unknown field: enforced.power.limit"),
+            result(true, detailed, ""),
+        ]);
+        let info = query_nvidia_power_info(&mock).unwrap();
+        assert_eq!(info.enforced_limit_w, Some(70.0));
+        assert_eq!(info.software_requested_limit_w, None);
+        assert_eq!(mock.calls().len(), 2);
+    }
+
+    #[test]
+    fn test_check_set_limit_output_mobile_rejected_exit_zero() {
+        let output = result(true, "Changing power management limit is not supported in current scope for GPU: 00000000:01:00.0.", "");
+        assert!(check_set_limit_output(&output).unwrap_err().contains("rejected"));
+    }
+
+    #[test]
+    fn test_check_set_limit_output_success() {
+        assert!(check_set_limit_output(&result(true, "", "")).is_ok());
+    }
+
+    #[test]
+    fn test_check_set_limit_output_nonzero_exit() {
+        assert!(check_set_limit_output(&result(false, "", "Insufficient Permissions")).is_err());
+    }
+
+    #[test]
+    fn test_boundary_watts_input() {
+        let info = NvidiaPowerInfo { min_limit_w: Some(1.0), max_limit_w: Some(500.0), ..Default::default() };
+        assert!(validate_nvidia_watts(1, &info).is_ok());
+        assert!(validate_nvidia_watts(500, &info).is_ok());
+        assert!(validate_nvidia_watts(0, &info).is_err());
+        assert!(validate_nvidia_watts(501, &info).is_err());
+    }
+
+    #[test]
+    fn test_boundary_outside_nvidia_range() {
+        let info = NvidiaPowerInfo { min_limit_w: Some(10.0), max_limit_w: Some(75.0), ..Default::default() };
+        assert!(validate_nvidia_watts(9, &info).is_err());
+        assert!(validate_nvidia_watts(76, &info).is_err());
+    }
+
+    #[test]
+    fn test_mobile_rejected_does_not_claim_success() {
+        let mock = MockExecutor::new([
+            query_result("[N/A]", "6.51"),
+            result(true, "Changing power management limit is not supported in current scope for GPU.", ""),
+        ]);
+        let error = set_gpu_power_cap_with_executor(75, &mock).unwrap_err();
+        assert!(error.contains("driver rejected"));
+        assert!(error.contains("enforced ceiling 70.00 W"));
+        assert_eq!(mock.calls().len(), 2);
+    }
+
+    #[test]
+    fn test_readback_mismatch_fails() {
+        let mock = MockExecutor::new([
+            query_result("[N/A]", "6.51"),
+            result(true, "", ""),
+            query_result("70.00", "6.51"),
+        ]);
+        let error = set_gpu_power_cap_with_executor(75, &mock).unwrap_err();
+        assert!(error.contains("read back as 70.00 W"));
+    }
+
+    #[test]
+    fn test_successful_limit_application() {
+        let mock = MockExecutor::new([
+            query_result("[N/A]", "6.51"),
+            result(true, "", ""),
+            query_result("75.00", "6.51"),
+        ]);
+        let detail = set_gpu_power_cap_with_executor(75, &mock).unwrap();
+        assert!(detail.contains("software-requested limit 75.00 W"));
+        assert!(detail.contains("enforced ceiling 70.00 W"));
+        assert!(detail.contains("live draw 6.51 W"));
+        assert_eq!(mock.calls().len(), 3);
+    }
+
+    #[test]
+    fn test_power_draw_conflation_prevention() {
+        let info = parse_csv_power_query(&mobile_info("[N/A]", "75.00")).unwrap();
+        assert!(verify_power_limit_readback(75, &info).is_err());
+    }
 }

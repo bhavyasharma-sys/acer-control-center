@@ -90,7 +90,7 @@ impl HardwareBackend for SysfsBackend {
         Err("CPU power limits are not supported by SysfsBackend".into())
     }
 
-    fn set_gpu_power_cap(&self, _watts: u32) -> Result<(), String> {
+    fn set_gpu_power_cap(&self, _watts: u32) -> Result<String, String> {
         Err("GPU power limits are not supported by SysfsBackend".into())
     }
 }

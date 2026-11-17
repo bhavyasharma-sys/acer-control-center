@@ -307,7 +307,7 @@ impl HardwareBackend for ClevoDchuBackend {
         crate::power::set_cpu_power_cap(watts)
     }
 
-    fn set_gpu_power_cap(&self, watts: u32) -> Result<(), String> {
+    fn set_gpu_power_cap(&self, watts: u32) -> Result<String, String> {
         crate::power::set_gpu_power_cap(watts)
     }
 }

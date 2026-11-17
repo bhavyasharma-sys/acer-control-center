@@ -352,7 +352,7 @@ impl eframe::App for ControlCenter {
             match result {
                 Ok((cpu, gpu)) => {
                     let success = cpu.starts_with("CPU RAPL setting read back")
-                        && gpu.starts_with("NVIDIA current limit verified");
+                        && gpu.starts_with("NVIDIA software-requested limit read back");
                     self.set_notice(success, format!("{cpu}. {gpu}."));
                 }
                 Err(error) => self.set_notice(
