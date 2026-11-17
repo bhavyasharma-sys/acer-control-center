@@ -192,19 +192,30 @@ impl ControlCenter {
                 let center = egui::pos2(rect.center().x, rect.top() + 100.0);
                 let radius = (rect.width() * 0.31).clamp(48.0, 77.0);
                 let fraction = value.map(|v| (v as f32 / max_value).clamp(0.0, 1.0));
-                let segments = 48;
-                for i in 0..segments {
-                    let start = std::f32::consts::PI - std::f32::consts::PI * i as f32 / segments as f32;
-                    let end = std::f32::consts::PI - std::f32::consts::PI * (i + 1) as f32 / segments as f32;
-                    let active = fraction.is_some_and(|amount| (i as f32 + 0.5) / segments as f32 <= amount);
-                    let position = i as f32 / segments as f32;
-                    let band_color = if position < 0.68 { COOL } else if position < 0.86 { WARM } else { HOT };
-                    let color = if active { band_color } else { Color32::from_rgb(54, 62, 69) };
-                    painter.line_segment(
-                        [egui::pos2(center.x + radius * start.cos(), center.y - radius * start.sin()),
-                         egui::pos2(center.x + radius * end.cos(), center.y - radius * end.sin())],
-                        Stroke::new(9.0, color),
-                    );
+                let arc_points = |start: f32, end: f32| {
+                    (0..=20)
+                        .map(|step| {
+                            let position = start + (end - start) * step as f32 / 20.0;
+                            let angle = std::f32::consts::PI * (1.0 - position);
+                            egui::pos2(
+                                center.x + radius * angle.cos(),
+                                center.y - radius * angle.sin(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                painter.add(egui::Shape::line(
+                    arc_points(0.0, 1.0),
+                    Stroke::new(9.0, Color32::from_rgb(54, 62, 69)),
+                ));
+                for (start, end, color) in [(0.0, 0.68, COOL), (0.68, 0.86, WARM), (0.86, 1.0, HOT)] {
+                    let visible_end = fraction.unwrap_or(0.0).min(end);
+                    if visible_end > start {
+                        painter.add(egui::Shape::line(
+                            arc_points(start, visible_end),
+                            Stroke::new(9.0, color),
+                        ));
+                    }
                 }
                 let display = value.map(|v| format!("{v}{suffix}")).unwrap_or_else(|| "—".to_owned());
                 painter.text(egui::pos2(center.x, center.y + 13.0), egui::Align2::CENTER_CENTER, display,
@@ -427,6 +438,6 @@ impl eframe::App for ControlCenter {
                     }
                 });
             });
-        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
 }
