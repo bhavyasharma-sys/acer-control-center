@@ -296,6 +296,8 @@ select {
   white-space: pre-line;
 }
 .apply-result.bad { background: #201010; border-color: #4a2424; color: #ffb4b4; }
+.apply-result div.good { color: #8fe3b0; }
+.apply-result div.bad { color: #ffb4b4; }
 
 .target-name { font-size: 22px; font-weight: 700; margin: 6px 0 0; }
 

@@ -27,6 +27,14 @@ SWATCHES = [(0, 229, 255), (255, 45, 85), (52, 224, 122), (255, 179, 0),
 IDLE_OPTIONS = [("Off", 0)] + [(f"{s} s", s) for s in (5, 10, 15, 20, 25, 30)]
 
 
+def _message_ok(message: str) -> bool:
+    if message.startswith("OK:"):
+        return True
+    if message.startswith("FAIL:"):
+        return False
+    return "read back" in message and "not applied" not in message
+
+
 def temperature_color(value):
     if value is None:
         return C().MUTED
@@ -67,6 +75,7 @@ class Pages:
             "Selecting a mode only stores the target. Caps are written when you "
             "press Apply and each write is verified by readback.", 12, C().MUTED)
         self.apply_result = TextBlock("", 12, C().MUTED)
+        self.apply_result_gpu = TextBlock("", 12, C().MUTED)
 
         # cooling
         self.cooling_fan = Segmented([("Automatic", "auto"), ("Maximum", "max")], big=True)
@@ -133,7 +142,9 @@ class Pages:
             self.apply_status.text = "Applied and verified by readback."
             self.apply_status.color = C().COOL
         else:
-            self.apply_status.text = last.get("error") or "Not applied."
+            name = names[selected] if isinstance(selected, int) \
+                and selected < len(names) else "Profile"
+            self.apply_status.text = last.get("error") or f"{name} not applied yet."
             self.apply_status.color = C().HOT
 
         self.cpu_clock.value = None if telemetry.get("cpu_clock_mhz") is None \
@@ -158,10 +169,24 @@ class Pages:
         self.gauge.readout = UNAVAILABLE if clock is None else str(clock)
         self.gauge.scale_max = "—" if clock_max is None else str(clock_max)
 
-        for bar, key in ((self.cpu_fan, "cpu_fan_rpm"), (self.gpu_fan, "gpu_fan_rpm")):
-            value = telemetry.get(key)
-            bar.fraction = None if value is None else value / FAN_FULL_SCALE
-            bar.text = UNAVAILABLE if value is None else f"{value} RPM"
+        cpu_rpm = telemetry.get("cpu_fan_rpm")
+        if cpu_rpm is None and telemetry.get("cpu_fan_exposed") is False:
+            self.cpu_fan.fraction = None
+            self.cpu_fan.text = "Not exposed by kernel"
+        else:
+            self.cpu_fan.fraction = None if cpu_rpm is None else cpu_rpm / FAN_FULL_SCALE
+            self.cpu_fan.text = UNAVAILABLE if cpu_rpm is None else f"{cpu_rpm} RPM"
+        gpu_rpm = telemetry.get("gpu_fan_rpm")
+        gpu_percent = telemetry.get("gpu_fan_percent")
+        if gpu_rpm is not None:
+            self.gpu_fan.fraction = gpu_rpm / FAN_FULL_SCALE
+            self.gpu_fan.text = f"{gpu_rpm} RPM"
+        elif gpu_percent is not None:
+            self.gpu_fan.fraction = gpu_percent / 100
+            self.gpu_fan.text = f"{gpu_percent} %"
+        else:
+            self.gpu_fan.fraction = None
+            self.gpu_fan.text = UNAVAILABLE
 
         for bar, key in ((self.mem, "memory_mib"), (self.disk, "storage_mib")):
             pair = telemetry.get(key)
@@ -187,15 +212,24 @@ class Pages:
         self.target_cpu.value = None if pair[0] is None else f"{pair[0]} W"
         self.target_gpu.value = None if pair[1] is None else f"{pair[1]} W"
         if last and (last.get("cpu_message") or last.get("error")):
-            self.apply_result.text = last.get("error") or \
-                f"CPU: {last.get('cpu_message')}\nGPU: {last.get('gpu_message')}"
-            self.apply_result.color = C().COOL if last.get("ok") else C().HOT
+            if last.get("error"):
+                self.apply_result.text = last["error"]
+                self.apply_result.color = C().HOT
+                self.apply_result_gpu.text = ""
+            else:
+                cpu_ok = last.get("cpu_ok", _message_ok(last.get("cpu_message") or ""))
+                gpu_ok = last.get("gpu_ok", _message_ok(last.get("gpu_message") or ""))
+                self.apply_result.text = f"CPU: {last.get('cpu_message')}"
+                self.apply_result.color = C().COOL if cpu_ok else C().HOT
+                self.apply_result_gpu.text = f"GPU: {last.get('gpu_message')}"
+                self.apply_result_gpu.color = C().COOL if gpu_ok else C().HOT
         else:
             self.apply_result.text = ""
+            self.apply_result_gpu.text = ""
 
         # cooling
-        self.c_cpu_fan.value = self.cpu_fan.text if self.cpu_fan.fraction is not None else None
-        self.c_gpu_fan.value = self.gpu_fan.text if self.gpu_fan.fraction is not None else None
+        self.c_cpu_fan.value = self.cpu_fan.text if self.cpu_fan.text != UNAVAILABLE else None
+        self.c_gpu_fan.value = self.gpu_fan.text if self.gpu_fan.text != UNAVAILABLE else None
         self.c_cpu_temp.value = self.cpu_temp.value
         self.c_cpu_temp.color = self.cpu_temp.color
         self.c_gpu_temp.value = self.gpu_temp.value
@@ -251,7 +285,8 @@ class Pages:
                 Card("Memory & storage", [self.mem, self.disk, self.vram, self.sources]),
                 Card("Selected power target", [self.target_name, self.target_cpu,
                                                self.target_gpu, self.target_note,
-                                               self.apply_result]),
+                                               self.apply_result,
+                                               self.apply_result_gpu]),
             ]
         if tab == "cooling":
             return [

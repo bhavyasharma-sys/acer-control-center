@@ -198,7 +198,7 @@ def fans() -> tuple[int | None, int | None]:
 NVIDIA_QUERY = [
     "nvidia-smi",
     "--query-gpu=temperature.gpu,clocks.sm,utilization.gpu,"
-    "memory.used,memory.total,power.draw",
+    "memory.used,memory.total,power.draw,fan.speed",
     "--format=csv,noheader,nounits",
     "-i",
     "0",
@@ -209,7 +209,7 @@ def parse_nvidia_line(line: str | None) -> dict | None:
     if not line:
         return None
     fields = [field.strip() for field in line.split(",")]
-    if len(fields) != 6:
+    if len(fields) not in (6, 7):
         return None
 
     def number(index: int) -> float | None:
@@ -227,6 +227,7 @@ def parse_nvidia_line(line: str | None) -> dict | None:
     memory_used = number(3)
     memory_total = number(4)
     power = number(5)
+    fan = number(6) if len(fields) == 7 else None
     return {
         "temperature_c": int(temperature) if temperature is not None else None,
         "clock_mhz": int(clock) if clock is not None else None,
@@ -239,7 +240,23 @@ def parse_nvidia_line(line: str | None) -> dict | None:
             else None
         ),
         "power_watts": round(power, 1) if power is not None else None,
+        "fan_percent": (
+            max(0, min(100, int(fan))) if fan is not None else None
+        ),
     }
+
+
+def hwmon_fan_exposed() -> bool:
+    """True when any hwmon chip exposes at least one fan input."""
+    for directory in _hwmon_dirs():
+        try:
+            entries = os.listdir(directory)
+        except OSError:
+            continue
+        if any(entry.startswith("fan") and entry.endswith("_input")
+               for entry in entries):
+            return True
+    return False
 
 
 def run_nvidia_smi(timeout: float = 3.0) -> str | None:
@@ -361,6 +378,8 @@ class Telemetry:
             "gpu_power_watts": gpu.get("power_watts"),
             "cpu_fan_rpm": cpu_fan,
             "gpu_fan_rpm": gpu_fan,
+            "gpu_fan_percent": gpu.get("fan_percent"),
+            "cpu_fan_exposed": hwmon_fan_exposed(),
             "memory_mib": list(mem) if mem else None,
             "storage_mib": list(storage) if storage else None,
             "gpu_memory_mib": gpu.get("memory_mib"),

@@ -144,3 +144,51 @@ class InteractionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PagesStatusTests(unittest.TestCase):
+    def _pages_updated(self, last_apply):
+        import pygame
+        pygame.init()
+        from desktopgui.pages import Pages
+        pages = Pages()
+        state = {
+            "profile_names": ["Performance", "Balanced", "Battery Saver"],
+            "selected_profile": 0,
+            "profiles": [[40, 75], [30, 60], [15, 30]],
+            "fan_max": False,
+            "last_apply": last_apply,
+        }
+        telemetry = {
+            "cpu_usage_percent": 3, "gpu_usage_percent": 0,
+            "cpu_clock_mhz": 875, "cpu_clock_max_mhz": 4800,
+            "cpu_temperature_c": 56, "gpu_temperature_c": 46,
+            "cpu_fan_rpm": None, "gpu_fan_rpm": None,
+            "gpu_fan_percent": 42, "cpu_fan_exposed": False,
+            "memory_mib": [8500, 15600], "storage_mib": [260000, 478000],
+            "gpu_memory_mib": [20, 6144],
+        }
+        pages.update(state, telemetry)
+        return pages
+
+    def test_per_device_apply_colours(self):
+        from desktopgui.theme import C
+        pages = self._pages_updated({
+            "ok": False, "cpu_ok": True, "gpu_ok": False,
+            "cpu_message": "OK: CPU RAPL setting read back: 40 W",
+            "gpu_message": "FAIL: GPU cap not applied: rejected",
+        })
+        self.assertTrue(pages.apply_result.text.startswith("CPU:"))
+        self.assertEqual(pages.apply_result.color, C().COOL)
+        self.assertTrue(pages.apply_result_gpu.text.startswith("GPU:"))
+        self.assertEqual(pages.apply_result_gpu.color, C().HOT)
+        self.assertEqual(pages.apply_status.text,
+                         "Performance not applied yet.")
+
+    def test_fan_fallbacks(self):
+        from desktopgui.theme import C
+        pages = self._pages_updated(None)
+        self.assertEqual(pages.gpu_fan.text, "42 %")
+        self.assertAlmostEqual(pages.gpu_fan.fraction, 0.42)
+        self.assertEqual(pages.cpu_fan.text, "Not exposed by kernel")
+        self.assertEqual(pages.vram.text, "20 / 6144 MiB")

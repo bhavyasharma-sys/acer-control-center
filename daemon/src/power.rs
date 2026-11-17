@@ -411,16 +411,47 @@ fn set_gpu_power_cap_with_executor(
     let before = query_nvidia_power_info(executor)?;
     validate_nvidia_watts(watts, &before)?;
 
+    // Try the requested wattage verbatim first: when the driver accepts it,
+    // the enforced ceiling is not a hard cap and the user's target must not
+    // be silently lowered.
     let output = executor.execute(&build_set_power_limit_args(watts))?;
+    let mut target = watts;
+    let mut clamped = false;
     if let Err(error) = check_set_limit_output(&output) {
-        return Err(format!("{error} Current NVIDIA state: {}.", power_info_summary(&before)));
+        // Mobile drivers refuse anything above the enforced ceiling with a
+        // "not supported in current scope" rejection even though the request
+        // is inside the min/max range. Retry once at that ceiling when the
+        // request exceeds it; otherwise surface the original rejection.
+        let ceiling = before
+            .enforced_limit_w
+            .map(|value| value as u32)
+            .filter(|value| (1..watts).contains(value));
+        let Some(ceiling) = ceiling else {
+            return Err(format!("{error} Current NVIDIA state: {}.", power_info_summary(&before)));
+        };
+        let retry = executor.execute(&build_set_power_limit_args(ceiling))?;
+        if let Err(retry_error) = check_set_limit_output(&retry) {
+            return Err(format!(
+                "{retry_error} Current NVIDIA state: {}.",
+                power_info_summary(&before)
+            ));
+        }
+        target = ceiling;
+        clamped = true;
     }
 
     let after = query_nvidia_power_info(executor)?;
-    verify_power_limit_readback(watts, &after).map_err(|error| {
+    // Verify what was actually written (the clamped target after a retry),
+    // never the original request.
+    verify_power_limit_readback(target, &after).map_err(|error| {
         format!("{error}. Current NVIDIA state: {}.", power_info_summary(&after))
     })?;
-    Ok(format!("{}", power_info_summary(&after)))
+    let detail = power_info_summary(&after);
+    Ok(if clamped {
+        format!("requested {watts} W, applied {target} W (driver-enforced ceiling); {detail}")
+    } else {
+        detail
+    })
 }
 
 pub fn set_gpu_power_cap(watts: u32) -> Result<String, String> {
@@ -779,6 +810,11 @@ mod tests {
                 "Changing power management limit is not supported in current scope for GPU: 00000000:01:00.0.",
                 "",
             ),
+            result(
+                true,
+                "Changing power management limit is not supported in current scope for GPU: 00000000:01:00.0.",
+                "",
+            ),
         ]);
         let error = set_gpu_power_cap_with_executor(75, &mock).unwrap_err();
         assert!(error.contains("not supported in current scope"));
@@ -786,7 +822,44 @@ mod tests {
         assert!(error.contains("enforced ceiling 70.00 W"));
         assert!(error.contains("base limit 60.00 W"));
         assert!(error.contains("live draw 6.51 W"));
-        // No readback query is performed after a rejected write.
+        // One write at the requested target plus one retry at the enforced
+        // ceiling; no readback query is performed after a rejected write.
+        assert_eq!(mock.calls().len(), 3);
+        assert_eq!(mock.calls()[2], build_set_power_limit_args(70));
+    }
+
+    #[test]
+    fn test_scope_rejection_retries_at_enforced_ceiling() {
+        // The mobile driver rejects 75 W (above its 70 W enforced ceiling) but
+        // accepts the retry at the ceiling; the success message must say so.
+        let mock = MockExecutor::new([
+            query_result("[N/A]", "6.51"),
+            result(
+                true,
+                "Changing power management limit is not supported in current scope for GPU: 00000000:01:00.0.",
+                "",
+            ),
+            result(true, "All done.", ""),
+            query_result("70.00", "6.51"),
+        ]);
+        let detail = set_gpu_power_cap_with_executor(75, &mock).unwrap();
+        assert!(detail.contains("requested 75 W, applied 70 W"));
+        let calls = mock.calls();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[1], build_set_power_limit_args(75));
+        assert_eq!(calls[2], build_set_power_limit_args(70));
+    }
+
+    #[test]
+    fn test_scope_rejection_without_ceiling_fails() {
+        // Without an enforced ceiling there is nothing to clamp to, so the
+        // original rejection is reported after a single write attempt.
+        let mock = MockExecutor::new([
+            result(true, "50.00, 250.00, 200.00, N/A, N/A, 45.20\n", ""),
+            result(true, "Power limit is not supported on this GPU.", ""),
+        ]);
+        let error = set_gpu_power_cap_with_executor(220, &mock).unwrap_err();
+        assert!(error.contains("not supported"));
         assert_eq!(mock.calls().len(), 2);
     }
 }
