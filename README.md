@@ -208,7 +208,12 @@ pygame wheels bundle.
 pip install pygame
 python3 -m desktopgui                 # opens a 1280x800 window
 python3 -m desktopgui --size 1000x700
+python3 -m desktopgui --theme dark    # or: light
 ```
+
+The default skin replicates Acer's PredatorSense look (charcoal panels, cyan
+accent, notched left navigation, 270-degree gauges); `--theme dark` is the
+left-icon-rail look and `--theme light` the AcerSense-style mint look.
 
 Tabs switch with the mouse or keys 1-6; Esc or Q quits. Hardware calls go to
 acer-control-daemon over the system D-Bus via busctl; telemetry comes from
