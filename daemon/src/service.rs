@@ -64,10 +64,10 @@ impl AcerService {
 
     pub fn set_power_caps(&self, cpu_watts: u32, gpu_watts: u32) -> (String, String) {
         let cpu = self.backend.set_cpu_power_cap(cpu_watts)
-            .map(|()| format!("CPU cap applied: {cpu_watts} W"))
+            .map(|()| format!("CPU RAPL setting read back: {cpu_watts} W (actual workload enforcement is not measured)"))
             .unwrap_or_else(|error| format!("CPU cap not applied: {error}"));
         let gpu = self.backend.set_gpu_power_cap(gpu_watts)
-            .map(|()| format!("GPU cap applied: {gpu_watts} W"))
+            .map(|()| format!("NVIDIA current limit verified: {gpu_watts} W"))
             .unwrap_or_else(|error| format!("GPU cap not applied: {error}"));
         (cpu, gpu)
     }

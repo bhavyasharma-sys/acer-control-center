@@ -288,8 +288,8 @@ impl eframe::App for ControlCenter {
             self.power_cap_applying = false;
             match result {
                 Ok((cpu, gpu)) => {
-                    let success = cpu.starts_with("CPU cap applied")
-                        && gpu.starts_with("GPU cap applied");
+                    let success = cpu.starts_with("CPU RAPL setting read back")
+                        && gpu.starts_with("NVIDIA current limit verified");
                     self.set_notice(success, format!("{cpu}. {gpu}."));
                 }
                 Err(error) => self.set_notice(

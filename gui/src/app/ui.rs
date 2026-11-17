@@ -220,7 +220,7 @@ impl ControlCenter {
                     });
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("Caps are saved per profile. CPU limits use Intel RAPL; GPU limits use the NVIDIA driver. Each requested limit is checked against the controls your hardware exposes, and unsupported or rejected caps are reported rather than treated as applied.").color(MUTED));
+                ui.label(RichText::new("Caps are saved per profile. CPU values are written to Intel RAPL and read back; this does not measure workload power or prove firmware enforcement. GPU values are verified against the NVIDIA driver's reported current limit. Laptop firmware and Dynamic Boost may constrain or override requested values.").color(MUTED));
             }
             Page::Battery => { ui.label(RichText::new("Battery charge management is planned for a future release.").color(MUTED)); }
             Page::Settings => {
