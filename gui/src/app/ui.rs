@@ -105,9 +105,12 @@ fn card(ui: &mut egui::Ui, min_height: f32, content: impl FnOnce(&mut egui::Ui))
 /// grows, for example when the last Apply result appears. `fallback` is used on
 /// the first frame.
 fn measured_row_height(ui: &egui::Ui, id: egui::Id, fallback: f32) -> f32 {
-    let stored = *ui
+    // Dereference inside the closure: `data_mut` returns whatever the closure
+    // returns, and a `&mut f32` would borrow the map, which does not outlive
+    // the call.
+    let stored = ui
         .ctx()
-        .data_mut(|data| data.get_temp_mut_or_default::<f32>(id));
+        .data_mut(|data| *data.get_temp_mut_or_default::<f32>(id));
     if stored.is_finite() && stored > 0.0 {
         stored.max(fallback)
     } else {
