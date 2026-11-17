@@ -82,6 +82,19 @@ def api_about() -> dict:
     }
 
 
+def _message_ok(message: str) -> bool:
+    """Classify one device message from the daemon.
+
+    New daemon versions prefix each message with ``OK:``/``FAIL:``; older
+    ones are classified by the historical substrings.
+    """
+    if message.startswith("OK:"):
+        return True
+    if message.startswith("FAIL:"):
+        return False
+    return "read back" in message and "not applied" not in message
+
+
 def apply_power(index: int) -> dict:
     stored_profiles, _ = profiles.load()
     if not 0 <= index <= 2:
@@ -95,11 +108,12 @@ def apply_power(index: int) -> dict:
         }
     else:
         cpu_message, gpu_message = result
-        ok = ("read back" in cpu_message and "not applied" not in cpu_message) and (
-            "read back" in gpu_message and "not applied" not in gpu_message
-        )
+        cpu_ok = _message_ok(cpu_message)
+        gpu_ok = _message_ok(gpu_message)
         payload = {
-            "ok": ok,
+            "ok": cpu_ok and gpu_ok,
+            "cpu_ok": cpu_ok,
+            "gpu_ok": gpu_ok,
             "cpu_message": cpu_message,
             "gpu_message": gpu_message,
             "index": index,

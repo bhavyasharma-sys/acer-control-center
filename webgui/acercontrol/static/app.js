@@ -212,10 +212,25 @@ function renderState(s) {
   const resultBox = el("apply-result");
   if (last) {
     resultBox.classList.remove("hidden");
-    resultBox.classList.toggle("bad", !last.ok);
-    resultBox.textContent = last.ok
-      ? `CPU: ${last.cpu_message}\nGPU: ${last.gpu_message}`
-      : (last.error || "apply failed");
+    resultBox.textContent = "";
+    if (last.error) {
+      resultBox.classList.add("bad");
+      resultBox.textContent = last.error;
+    } else {
+      resultBox.classList.remove("bad");
+      const lines = [
+        ["CPU", last.cpu_message,
+         last.cpu_ok === undefined ? last.ok : last.cpu_ok],
+        ["GPU", last.gpu_message,
+         last.gpu_ok === undefined ? last.ok : last.gpu_ok],
+      ];
+      for (const [label, message, ok] of lines) {
+        const line = document.createElement("div");
+        line.textContent = `${label}: ${message}`;
+        line.classList.add(ok ? "good" : "bad");
+        resultBox.appendChild(line);
+      }
+    }
   } else {
     resultBox.classList.add("hidden");
   }

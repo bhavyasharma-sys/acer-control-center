@@ -249,3 +249,50 @@ class ServerApi(FakeBusctlMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PowerMessageContractTests(unittest.TestCase):
+    def _apply_with(self, messages):
+        from webgui.acercontrol import hardware, server
+        original = hardware.set_power_caps
+        hardware.set_power_caps = lambda cpu, gpu: messages
+        try:
+            return server.apply_power(0)
+        finally:
+            hardware.set_power_caps = original
+
+    def test_prefixes_drive_per_device_ok(self):
+        payload = self._apply_with((
+            "OK: CPU RAPL setting read back: 40 W",
+            "FAIL: GPU cap not applied: driver rejected the request",
+        ))
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cpu_ok"])
+        self.assertFalse(payload["gpu_ok"])
+
+    def test_both_ok_prefixes(self):
+        payload = self._apply_with((
+            "OK: CPU RAPL setting read back: 30 W",
+            "OK: GPU power limit read back: requested 75 W, applied 70 W",
+        ))
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["cpu_ok"])
+        self.assertTrue(payload["gpu_ok"])
+
+    def test_legacy_messages_still_classified(self):
+        payload = self._apply_with((
+            "CPU RAPL setting read back: 30 W (actual workload enforcement "
+            "is not measured)",
+            "GPU cap not applied: NVIDIA driver rejected the request",
+        ))
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cpu_ok"])
+        self.assertFalse(payload["gpu_ok"])
+
+    def test_nvidia_fan_speed_parsed(self):
+        from webgui.acercontrol import telemetry
+        parsed = telemetry.parse_nvidia_line("46, 210, 0, 20, 6144, 6.7, 42")
+        self.assertEqual(parsed["fan_percent"], 42)
+        legacy = telemetry.parse_nvidia_line("46, 210, 0, 20, 6144, 6.7")
+        self.assertIsNone(legacy["fan_percent"])
+        self.assertIsNone(telemetry.parse_nvidia_line("1, 2, 3"))
