@@ -37,24 +37,44 @@ jobs:
 
       # Compiler output is echoed into the job summary on failure so the errors
       # are readable without downloading the raw run log.
+      # Each crate is checked separately so a failure names the crate, and the
+      # first lines of the compiler output are re-emitted as annotations so the
+      # reason is readable without the raw log archive.
       - name: Check daemon and GUI
         shell: bash
         run: |
-          log="$RUNNER_TEMP/cargo-check.log"
-          if ! {
-            cargo check --locked --manifest-path daemon/Cargo.toml &&
-            ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" cargo check --locked --manifest-path gui/Cargo.toml
-          } >"$log" 2>&1; then
+          log="${RUNNER_TEMP:-/tmp}/cargo-check.log"
+          cargo --version; rustc --version
+          # $1 = annotation title, $2 = a --message-format short log, so every
+          # diagnostic is one line and the errors are not buried under warnings.
+          announce() {
+            local detail
+            detail="$(sed -e 's/\x1b\[[0-9;]*m//g' "$2" | grep -E ': error' | head -n 60)"
+            [ -n "$detail" ] || detail="$(sed -e 's/\x1b\[[0-9;]*m//g' "$2" | head -n 60)"
+            detail="${detail//%/%25}"
+            detail="${detail//$'\n'/%0A}"
+            echo "::error title=$1::${detail//$'\r'/%0D}"
+          }
+          short_log="${RUNNER_TEMP:-/tmp}/cargo-check-short.log"
+          status=0
+          : >"$log"
+          cargo check --locked --color never --manifest-path daemon/Cargo.toml >>"$log" 2>&1 || status=1
+          if [ "$status" -ne 0 ]; then
             cat "$log"
-            {
-              echo '## cargo check failed'
-              echo '```'
-              grep -E '^(error|warning)(\[|:)' -A 8 "$log" | head -n 400
-              echo '```'
-            } >>"$GITHUB_STEP_SUMMARY"
-            exit 1
+            cargo check --locked --color never --message-format short \
+              --manifest-path daemon/Cargo.toml >"$short_log" 2>&1 || true
+            announce "daemon cargo check failed" "$short_log"; exit 1
           fi
+          : >"$log"
+          ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" \
+            cargo check --locked --color never --manifest-path gui/Cargo.toml >>"$log" 2>&1 || status=1
           cat "$log"
+          if [ "$status" -ne 0 ]; then
+            ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" \
+              cargo check --locked --color never --message-format short \
+              --manifest-path gui/Cargo.toml >"$short_log" 2>&1 || true
+            announce "gui cargo check failed" "$short_log"; exit 1
+          fi
 
       - name: Run unit tests
         # Telemetry parsers, NVIDIA command construction and rejection

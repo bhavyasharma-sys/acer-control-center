@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acer Control Center</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">ACER</span>
+    <span class="brand-sub">Control Center</span>
+  </div>
+  <div class="topbar-right">
+    <span id="conn-pill" class="pill">connecting…</span>
+    <span id="version" class="muted"></span>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<nav class="tabs" id="tabs" role="tablist">
+  <button class="tab active" data-tab="dashboard" role="tab">Dashboard</button>
+  <button class="tab" data-tab="cooling" role="tab">Cooling</button>
+  <button class="tab" data-tab="keyboard" role="tab">Keyboard RGB</button>
+  <button class="tab" data-tab="performance" role="tab">Performance</button>
+  <button class="tab" data-tab="battery" role="tab">Battery</button>
+  <button class="tab" data-tab="settings" role="tab">Settings</button>
+</nav>
+
+<main>
+  <!-- ------------------------------------------------------- dashboard -->
+  <section id="tab-dashboard" class="tabpanel">
+    <div class="modebar card">
+      <span class="modebar-label">Power mode</span>
+      <div class="segmented" id="mode-segments"></div>
+      <span class="spacer"></span>
+      <span id="apply-state" class="chip">—</span>
+      <button id="apply-btn" class="btn primary">Apply</button>
+    </div>
+
+    <div class="cards">
+      <article class="card">
+        <h3 class="card-title">System</h3>
+        <p class="card-sub">Acer Aspire 7 · A715-79G · Core 5 210H · RTX 3050</p>
+        <dl class="stats">
+          <div class="stat"><dt>CPU clock (avg)</dt><dd id="v-cpu-clock">—</dd></div>
+          <div class="stat"><dt>CPU temperature</dt><dd id="v-cpu-temp">—</dd></div>
+          <div class="stat"><dt>GPU clock</dt><dd id="v-gpu-clock">—</dd></div>
+          <div class="stat"><dt>GPU temperature</dt><dd id="v-gpu-temp">—</dd></div>
+        </dl>
+        <div class="bar-row">
+          <span class="bar-label">CPU use</span>
+          <div class="bar"><div class="bar-fill cpu" id="bar-cpu"></div></div>
+          <span class="bar-value" id="v-cpu-use">—</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">GPU use</span>
+          <div class="bar"><div class="bar-fill gpu" id="bar-gpu"></div></div>
+          <span class="bar-value" id="v-gpu-use">—</span>
+        </div>
+      </article>
+
+      <article class="card gauge-card">
+        <h3 class="card-title">CPU clock speed</h3>
+        <svg id="gauge" viewBox="0 0 200 120" role="img" aria-label="CPU clock gauge">
+          <path class="gauge-track" d="M20 110 A 80 80 0 0 1 180 110" />
+          <path class="gauge-value" id="gauge-arc" d="M20 110 A 80 80 0 0 1 180 110" />
+          <line class="gauge-needle" id="gauge-needle" x1="100" y1="110" x2="100" y2="42" />
+          <circle class="gauge-hub" cx="100" cy="110" r="6" />
+          <text class="gauge-readout" id="gauge-readout" x="100" y="92">—</text>
+          <text class="gauge-unit" x="100" y="106">MHz average</text>
+          <text class="gauge-scale" x="22" y="119">0</text>
+          <text class="gauge-scale" id="gauge-max" x="178" y="119">—</text>
+        </svg>
+        <p class="card-sub center">Average of online cores · scale from the detected cpufreq maximum</p>
+      </article>
+
+      <article class="card">
+        <h3 class="card-title">Fans</h3>
+        <div class="bar-row">
+          <span class="bar-label">CPU fan</span>
+          <div class="bar"><div class="bar-fill fan" id="bar-cpu-fan"></div></div>
+          <span class="bar-value" id="v-cpu-fan">—</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">GPU fan</span>
+          <div class="bar"><div class="bar-fill fan" id="bar-gpu-fan"></div></div>
+          <span class="bar-value" id="v-gpu-fan">—</span>
+        </div>
+        <p class="card-sub">Scale 0 – 6000 RPM · fan mode below</p>
+        <div class="segmented" id="fan-segments"></div>
+      </article>
+
+      <article class="card">
+        <h3 class="card-title">Memory &amp; storage</h3>
+        <div class="bar-row">
+          <span class="bar-label">Memory</span>
+          <div class="bar"><div class="bar-fill mem" id="bar-mem"></div></div>
+          <span class="bar-value" id="v-mem">—</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Storage /</span>
+          <div class="bar"><div class="bar-fill mem" id="bar-disk"></div></div>
+          <span class="bar-value" id="v-disk">—</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">VRAM</span>
+          <div class="bar"><div class="bar-fill gpu" id="bar-vram"></div></div>
+          <span class="bar-value" id="v-vram">—</span>
+        </div>
+        <p class="card-sub">/proc/meminfo · statvfs on / · NVIDIA telemetry</p>
+      </article>
+
+      <article class="card">
+        <h3 class="card-title">Selected power target</h3>
+        <p class="target-name" id="target-name">—</p>
+        <dl class="stats">
+          <div class="stat"><dt>CPU limit (software request)</dt><dd id="v-target-cpu">—</dd></div>
+          <div class="stat"><dt>GPU limit (software request)</dt><dd id="v-target-gpu">—</dd></div>
+        </dl>
+        <p class="card-sub">Selecting a mode only stores the target. Caps are written when you press Apply and each write is verified by readback.</p>
+        <div id="apply-result" class="apply-result hidden"></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------- cooling -->
+  <section id="tab-cooling" class="tabpanel hidden">
+    <div class="cards">
+      <article class="card">
+        <h3 class="card-title">Fan mode</h3>
+        <div class="segmented big" id="cooling-fan-segments"></div>
+        <p class="card-sub">Maximum fan pins the fans at full speed; automatic returns control to the firmware curve.</p>
+        <div id="cooling-status" class="apply-result hidden"></div>
+      </article>
+      <article class="card">
+        <h3 class="card-title">Live readings</h3>
+        <dl class="stats">
+          <div class="stat"><dt>CPU fan</dt><dd id="c-cpu-fan">—</dd></div>
+          <div class="stat"><dt>GPU fan</dt><dd id="c-gpu-fan">—</dd></div>
+          <div class="stat"><dt>CPU temperature</dt><dd id="c-cpu-temp">—</dd></div>
+          <div class="stat"><dt>GPU temperature</dt><dd id="c-gpu-temp">—</dd></div>
+          <div class="stat"><dt>GPU power draw</dt><dd id="c-gpu-power">—</dd></div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- keyboard -->
+  <section id="tab-keyboard" class="tabpanel hidden">
+    <div class="cards">
+      <article class="card">
+        <h3 class="card-title">Brightness</h3>
+        <input type="range" id="kb-brightness" min="0" max="100" step="1" value="0">
+        <div class="row"><span class="muted">Level</span><span id="kb-brightness-value">—</span></div>
+        <p class="card-sub">Drag to set; the daemon writes the EC on release.</p>
+      </article>
+      <article class="card">
+        <h3 class="card-title">Colour</h3>
+        <div class="swatches" id="kb-swatches"></div>
+        <div class="row">
+          <label for="kb-color">Custom</label>
+          <input type="color" id="kb-color" value="#00e5ff">
+          <button class="btn" id="kb-color-apply">Set colour</button>
+        </div>
+        <div class="row">
+          <button class="btn" id="kb-breathing">Breathing: —</button>
+        </div>
+      </article>
+      <article class="card">
+        <h3 class="card-title">Idle behaviour</h3>
+        <div class="row">
+          <label for="kb-idle">Fade out after</label>
+          <select id="kb-idle"></select>
+        </div>
+        <p class="card-sub">Stored for the desktop session, which fades the keyboard after inactivity and restores it when you return.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------- performance -->
+  <section id="tab-performance" class="tabpanel hidden">
+    <div class="card">
+      <h3 class="card-title">Power profiles</h3>
+      <table class="profile-table">
+        <thead>
+          <tr><th>Profile</th><th>CPU limit (W)</th><th>GPU limit (W)</th><th>Selected</th></tr>
+        </thead>
+        <tbody id="profile-rows"></tbody>
+      </table>
+      <div class="row">
+        <button class="btn primary" id="profile-save">Save profiles</button>
+        <span id="profile-status" class="muted"></span>
+      </div>
+      <p class="card-sub">Values are software power-limit requests, 1 – 500 W. Saving stores them; Apply on the dashboard writes them to hardware.</p>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------- battery -->
+  <section id="tab-battery" class="tabpanel hidden">
+    <div class="cards">
+      <article class="card">
+        <h3 class="card-title">Battery</h3>
+        <dl class="stats">
+          <div class="stat"><dt>Charge</dt><dd id="b-percent">—</dd></div>
+          <div class="stat"><dt>Status</dt><dd id="b-status">—</dd></div>
+          <div class="stat"><dt>GPU power draw</dt><dd id="b-gpu-power">—</dd></div>
+        </dl>
+        <div class="bar-row">
+          <span class="bar-label">Charge</span>
+          <div class="bar"><div class="bar-fill mem" id="bar-batt"></div></div>
+          <span class="bar-value" id="v-batt">—</span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- settings -->
+  <section id="tab-settings" class="tabpanel hidden">
+    <div class="cards">
+      <article class="card">
+        <h3 class="card-title">About</h3>
+        <dl class="stats">
+          <div class="stat"><dt>Frontend</dt><dd id="s-frontend">—</dd></div>
+          <div class="stat"><dt>Daemon</dt><dd id="s-daemon">—</dd></div>
+          <div class="stat"><dt>Daemon reachable</dt><dd id="s-reachable">—</dd></div>
+          <div class="stat"><dt>busctl present</dt><dd id="s-busctl">—</dd></div>
+        </dl>
+      </article>
+      <article class="card">
+        <h3 class="card-title">How this frontend works</h3>
+        <p class="card-sub">A standard-library Python server serves this page and proxies hardware calls to acer-control-daemon over the system D-Bus using busctl. Telemetry is read from /proc and /sys. Nothing here is compiled; run it with <code>python3 -m webgui.acercontrol</code>.</p>
+      </article>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
