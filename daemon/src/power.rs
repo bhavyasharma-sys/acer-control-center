@@ -613,14 +613,17 @@ mod tests {
 
     #[test]
     fn test_mobile_rejected_does_not_claim_success() {
+        // Both the requested target and the retry at the enforced ceiling are
+        // refused: the daemon must report the rejection, never success.
         let mock = MockExecutor::new([
             query_result("[N/A]", "6.51"),
+            result(true, "Changing power management limit is not supported in current scope for GPU.", ""),
             result(true, "Changing power management limit is not supported in current scope for GPU.", ""),
         ]);
         let error = set_gpu_power_cap_with_executor(75, &mock).unwrap_err();
         assert!(error.contains("driver rejected"));
         assert!(error.contains("enforced ceiling 70.00 W"));
-        assert_eq!(mock.calls().len(), 2);
+        assert_eq!(mock.calls().len(), 3);
     }
 
     #[test]
