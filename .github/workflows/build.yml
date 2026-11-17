@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential gcc g++ make kmod linux-headers-generic \
+            build-essential gcc g++ make \
             meson ninja-build pkg-config libxkbcommon-dev libwayland-dev libx11-dev
 
       - name: Install Rust
@@ -29,14 +29,6 @@ jobs:
 
       - name: Check installer scripts
         run: bash -n install.sh uninstall.sh packaging/build-package.sh packaging/scripts/postinstall.sh packaging/scripts/postremove.sh
-
-      - name: Build kernel driver
-        working-directory: driver
-        run: |
-          HEADER_DIR="$(find /usr/src -maxdepth 1 -type d -name 'linux-headers-*-generic' | sort | tail -n1)"
-          test -n "$HEADER_DIR"
-          make KDIR="$HEADER_DIR"
-          find . -name '*.ko' -print -quit | grep -q .
 
       - name: Build native library
         run: |
@@ -58,6 +50,31 @@ jobs:
         run: |
           cargo test --locked --manifest-path daemon/Cargo.toml
           cargo test --locked --manifest-path gui/Cargo.toml
+
+  # Separate job: the kernel module is built by DKMS on the target machine at
+  # install time, and packaging only ships the driver source, so nothing else
+  # here depends on this step succeeding. Keeping it apart means a kernel
+  # headers/API problem on the CI runner cannot hide the results of the Rust
+  # checks, the unit tests or the package builds.
+  driver:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc make kmod linux-headers-generic
+
+      - name: Build kernel driver
+        working-directory: driver
+        run: |
+          HEADER_DIR="$(find /usr/src -maxdepth 1 -type d -name 'linux-headers-*-generic' | sort | tail -n1)"
+          test -n "$HEADER_DIR"
+          echo "Building against $HEADER_DIR"
+          make KDIR="$HEADER_DIR"
+          find . -name '*.ko' -print -quit | grep -q .
 
   packages:
     needs: build
