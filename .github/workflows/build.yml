@@ -35,21 +35,51 @@ jobs:
           meson setup target/ci-lib lib --prefix=/usr --libdir=lib --buildtype=release
           meson compile -C target/ci-lib
 
+      # Compiler output is echoed into the job summary on failure so the errors
+      # are readable without downloading the raw run log.
       - name: Check daemon and GUI
+        shell: bash
         run: |
-          cargo check --locked --manifest-path daemon/Cargo.toml
-          ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" cargo check --locked --manifest-path gui/Cargo.toml
+          log="$RUNNER_TEMP/cargo-check.log"
+          if ! {
+            cargo check --locked --manifest-path daemon/Cargo.toml &&
+            ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" cargo check --locked --manifest-path gui/Cargo.toml
+          } >"$log" 2>&1; then
+            cat "$log"
+            {
+              echo '## cargo check failed'
+              echo '```'
+              grep -E '^(error|warning)(\[|:)' -A 8 "$log" | head -n 400
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat "$log"
 
       - name: Run unit tests
         # Telemetry parsers, NVIDIA command construction and rejection
         # detection, power-limit readback mismatches, profile defaults and
         # config parsing, and UI state logic. Hardware and command execution
         # are mocked, so these run without an Acer laptop or NVIDIA GPU.
+        shell: bash
         env:
           ACERCONTROL_LIB_DIR: ${{ github.workspace }}/target/ci-lib
         run: |
-          cargo test --locked --manifest-path daemon/Cargo.toml
-          cargo test --locked --manifest-path gui/Cargo.toml
+          log="$RUNNER_TEMP/cargo-test.log"
+          if ! {
+            cargo test --locked --manifest-path daemon/Cargo.toml &&
+            cargo test --locked --manifest-path gui/Cargo.toml
+          } >"$log" 2>&1; then
+            cat "$log"
+            {
+              echo '## cargo test failed'
+              echo '```'
+              grep -E '^(error|warning)(\[|:)|^(failures|test result):' -A 8 "$log" | head -n 400
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat "$log"
 
   # Separate job: the kernel module is built by DKMS on the target machine at
   # install time, and packaging only ships the driver source, so nothing else
@@ -69,11 +99,24 @@ jobs:
 
       - name: Build kernel driver
         working-directory: driver
+        shell: bash
         run: |
           HEADER_DIR="$(find /usr/src -maxdepth 1 -type d -name 'linux-headers-*-generic' | sort | tail -n1)"
           test -n "$HEADER_DIR"
           echo "Building against $HEADER_DIR"
-          make KDIR="$HEADER_DIR"
+          log="$RUNNER_TEMP/driver-build.log"
+          if ! make KDIR="$HEADER_DIR" >"$log" 2>&1; then
+            cat "$log"
+            {
+              echo '## kernel driver build failed'
+              echo "Headers: \`$HEADER_DIR\`"
+              echo '```'
+              grep -E 'error|Error' -A 6 "$log" | head -n 300
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat "$log"
           find . -name '*.ko' -print -quit | grep -q .
 
   packages:
