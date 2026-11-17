@@ -8,6 +8,7 @@ the window never freezes waiting on the daemon or on nvidia-smi.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import threading
@@ -23,18 +24,7 @@ from webgui.acercontrol import server as backend  # noqa: E402
 
 from . import layout as flow  # noqa: E402
 from .pages import Pages  # noqa: E402
-from .theme import (  # noqa: E402
-    ACCENT,
-    ACCENT_DIM,
-    BG,
-    CARD_EDGE,
-    COOL,
-    FONTS,
-    HOT,
-    MUTED,
-    SURFACE,
-    TEXT,
-)
+from .theme import C, FONTS, apply as apply_theme  # noqa: E402
 from .widgets import SliderRow, StepperRow  # noqa: E402
 
 TABS = ["dashboard", "cooling", "keyboard", "performance", "battery", "settings"]
@@ -216,54 +206,109 @@ class App:
         state, telemetry = self.snapshot_pair()
         self.pages.update(state, telemetry)
         width, height = self.screen.get_size()
-        self.screen.fill(BG)
+        self.screen.fill(C().BG)
 
         # header
-        pygame.draw.rect(self.screen, SURFACE, (0, 0, width, 54))
-        pygame.draw.line(self.screen, CARD_EDGE, (0, 54), (width, 54), 1)
-        pygame.draw.rect(self.screen, ACCENT, (20, 22, 12, 12), border_radius=3)
-        brand = FONTS.get(16, True).render("ACER", True, ACCENT)
+        pygame.draw.rect(self.screen, C().SURFACE, (0, 0, width, 54))
+        pygame.draw.line(self.screen, C().CARD_EDGE, (0, 54), (width, 54), 1)
+        pygame.draw.rect(self.screen, C().ACCENT, (20, 22, 12, 12), border_radius=3)
+        brand = FONTS.get(16, True).render("ACER", True, C().ACCENT)
         self.screen.blit(brand, (42, 18))
-        title = FONTS.get(17).render("Control Center", True, TEXT)
-        self.screen.blit(title, (42 + brand.get_width() + 14, 17))
+        if C().CHAMFER:
+            cx = width // 2
+            plate = [(cx - 170, 0), (cx + 170, 0), (cx + 146, 48), (cx - 146, 48)]
+            pygame.draw.polygon(self.screen, (9, 11, 12), plate)
+            title = FONTS.get(17, True).render("Control Center", True, C().TEXT)
+            self.screen.blit(title, title.get_rect(center=(cx, 24)))
+        else:
+            title = FONTS.get(17).render("Control Center", True, C().TEXT)
+            self.screen.blit(title, (42 + brand.get_width() + 14, 17))
         reachable = state.get("daemon_available")
         pill_text = "daemon online" if reachable else "daemon offline"
         pill_font = FONTS.get(11, True)
-        pill = pill_font.render(pill_text.upper(), True, COOL if reachable else HOT)
+        pill = pill_font.render(pill_text.upper(), True, C().COOL if reachable else C().HOT)
         pill_rect = pygame.Rect(width - pill.get_width() - 44, 16, pill.get_width() + 28, 24)
-        pygame.draw.rect(self.screen, (14, 32, 25) if reachable else (32, 16, 16),
+        pygame.draw.rect(self.screen,
+                         C().PILL_GOOD_BG if reachable else C().PILL_BAD_BG,
                          pill_rect, border_radius=12)
         self.screen.blit(pill, (pill_rect.x + 14, pill_rect.y + 5))
-        version = FONTS.get(11).render(f"v{state.get('frontend_version', '?')}", True, MUTED)
+        version = FONTS.get(11).render(f"v{state.get('frontend_version', '?')}", True, C().MUTED)
         self.screen.blit(version, (pill_rect.x - version.get_width() - 14, 21))
 
-        # tabs
+        # navigation: left icon rail (dark look) or top tab bar (light look)
         self.tab_rects = []
-        cursor = 20
-        tab_font = FONTS.get(13, True)
-        for tab in TABS:
-            label = tab_font.render(tab.capitalize(), True,
-                                    ACCENT if tab == self.tab else MUTED)
-            rect = pygame.Rect(cursor, 62, label.get_width() + 30, 32)
-            if tab == self.tab:
-                pygame.draw.rect(self.screen, (16, 26, 33), rect, border_radius=9)
-                pygame.draw.rect(self.screen, CARD_EDGE, rect, width=1, border_radius=9)
-            self.screen.blit(label, (rect.x + 15, rect.y + 8))
-            self.tab_rects.append((rect, tab))
-            cursor += rect.width + 6
+        left_margin = 20
+        if C().nav == "notch":
+            nav_w = 168
+            for index, tab in enumerate(TABS):
+                rect = pygame.Rect(18, 76 + index * 46, nav_w, 38)
+                active = tab == self.tab
+                cut = 12
+                pts = [(rect.x + cut, rect.y), (rect.right, rect.y),
+                       (rect.right, rect.bottom), (rect.x, rect.bottom)]
+                pygame.draw.polygon(self.screen, C().ACCENT if active else C().CARD, pts)
+                pygame.draw.polygon(self.screen,
+                                    C().ACCENT if active else C().CARD_EDGE, pts, 1)
+                label = FONTS.get(12, active).render(
+                    tab.capitalize(), True, C().TEXT if active else C().MUTED)
+                self.screen.blit(label, label.get_rect(midleft=(rect.x + cut + 14,
+                                                                 rect.centery)))
+                self.tab_rects.append((rect, tab))
+            left_margin = 18 + nav_w + 22
+        elif C().nav == "rail":
+            rail_w = 86
+            pygame.draw.rect(self.screen, C().SURFACE, (0, 54, rail_w, height - 54))
+            pygame.draw.line(self.screen, C().CARD_EDGE, (rail_w, 54), (rail_w, height), 1)
+            for index, tab in enumerate(TABS):
+                rect = pygame.Rect(8, 68 + index * 66, rail_w - 16, 60)
+                active = tab == self.tab
+                if active:
+                    pygame.draw.rect(self.screen, C().CARD, rect, border_radius=10)
+                    pygame.draw.rect(self.screen, C().ACCENT,
+                                     pygame.Rect(8, rect.y + 12, 3, rect.h - 24),
+                                     border_radius=2)
+                draw_icon(self.screen, tab, (rect.centerx, rect.y + 22),
+                          C().ACCENT if active else C().MUTED)
+                label = FONTS.get(9, True).render(
+                    tab.capitalize(), True, C().ACCENT if active else C().MUTED)
+                self.screen.blit(label, label.get_rect(center=(rect.centerx, rect.y + 46)))
+                self.tab_rects.append((rect, tab))
+            left_margin = rail_w + 20
+        else:
+            cursor = left_margin
+            tab_font = FONTS.get(13, True)
+            for tab in TABS:
+                label = tab_font.render(tab.capitalize(), True,
+                                        C().ACCENT if tab == self.tab else C().MUTED)
+                rect = pygame.Rect(cursor, 62, label.get_width() + 30, 32)
+                if tab == self.tab:
+                    pygame.draw.rect(self.screen, C().CARD, rect, border_radius=9)
+                    pygame.draw.rect(self.screen, C().CARD_EDGE, rect, width=1,
+                                     border_radius=9)
+                self.screen.blit(label, (rect.x + 15, rect.y + 8))
+                self.tab_rects.append((rect, tab))
+                cursor += rect.width + 6
 
         if not reachable:
             banner = FONTS.get(12).render(
                 f"Hardware control unavailable: {state.get('daemon_error') or 'daemon not on the system bus'}. Telemetry still works.",
-                True, (255, 180, 180))
-            pygame.draw.rect(self.screen, (36, 20, 20),
-                             (20, 100, min(width - 40, banner.get_width() + 28), 28),
+                True, C().BANNER_TEXT)
+            pygame.draw.rect(self.screen, C().BANNER_BG,
+                             (left_margin, 100,
+                              min(width - left_margin - 20, banner.get_width() + 28), 28),
                              border_radius=8)
-            self.screen.blit(banner, (34, 106))
+            self.screen.blit(banner, (left_margin + 14, 106))
 
         # content
         area_top = 140 if not reachable else 112
-        area = pygame.Rect(20, area_top, width - 40, height - area_top - 46)
+        area = pygame.Rect(left_margin, area_top, width - left_margin - 20,
+                           height - area_top - 46)
+        if C().CHAMFER:
+            from .widgets import chamfer_points
+            panel = area.inflate(24, 20)
+            pts = chamfer_points(panel, 18)
+            pygame.draw.polygon(self.screen, C().SURFACE, pts)
+            pygame.draw.polygon(self.screen, C().ACCENT_DIM, pts, 1)
         cards = self.pages.cards(self.tab)
         # The stepper table reads best as one centred column of its own.
         if self.tab == "performance":
@@ -292,10 +337,10 @@ class App:
                 self.card_hits.append((hit_rect, target))
         if max_scroll > 0:
             track = pygame.Rect(width - 10, area.y, 4, area.height)
-            pygame.draw.rect(surface, (22, 35, 43), track, border_radius=2)
+            pygame.draw.rect(surface, C().BAR_BG, track, border_radius=2)
             thumb = max(30, int(area.height * area.height / (content_bottom - area.y)))
             offset = int((track.h - thumb) * self.scroll[self.tab] / max_scroll)
-            pygame.draw.rect(surface, ACCENT_DIM,
+            pygame.draw.rect(surface, C().ACCENT_DIM,
                              pygame.Rect(track.x, track.y + offset, track.w, thumb),
                              border_radius=2)
 
@@ -305,9 +350,9 @@ class App:
             if time.time() - stamp < 5:
                 font = FONTS.get(12, True)
                 label = font.render(("✓ " if good else "⚠ ") + text, True,
-                                    COOL if good else HOT)
-                pygame.draw.rect(self.screen, SURFACE, (0, height - 40, width, 40))
-                pygame.draw.line(self.screen, CARD_EDGE, (0, height - 40),
+                                    C().COOL if good else C().HOT)
+                pygame.draw.rect(self.screen, C().SURFACE, (0, height - 40, width, 40))
+                pygame.draw.line(self.screen, C().CARD_EDGE, (0, height - 40),
                                  (width, height - 40), 1)
                 self.screen.blit(label, (20, height - 28))
 
@@ -322,6 +367,38 @@ class App:
         pygame.quit()
 
 
+def draw_icon(surface, tab: str, center, color) -> None:
+    x, y = center
+    if tab == "dashboard":
+        pygame.draw.arc(surface, color, pygame.Rect(x - 9, y - 8, 18, 18), 0.0, math.pi, 2)
+        pygame.draw.line(surface, color, (x, y + 1), (x + 5, y - 5), 2)
+    elif tab == "cooling":
+        pygame.draw.circle(surface, color, (x, y), 3)
+        for angle in (0.4, 2.5, 4.6):
+            pygame.draw.line(surface, color, (x, y),
+                             (x + 9 * math.cos(angle), y + 9 * math.sin(angle)), 2)
+    elif tab == "keyboard":
+        pygame.draw.rect(surface, color, pygame.Rect(x - 9, y - 5, 18, 10), width=2,
+                         border_radius=2)
+        for dx in (-5, 0, 5):
+            pygame.draw.line(surface, color, (x + dx, y - 1), (x + dx, y + 1), 1)
+    elif tab == "performance":
+        pygame.draw.polygon(surface, color, [
+            (x + 2, y - 9), (x - 5, y + 1), (x - 1, y + 1),
+            (x - 2, y + 9), (x + 5, y - 1), (x + 1, y - 1)])
+    elif tab == "battery":
+        pygame.draw.rect(surface, color, pygame.Rect(x - 8, y - 5, 14, 10), width=2,
+                         border_radius=2)
+        pygame.draw.rect(surface, color, pygame.Rect(x + 7, y - 2, 3, 4))
+    else:
+        pygame.draw.circle(surface, color, (x, y), 6, 2)
+        for angle in range(6):
+            a = angle * math.pi / 3
+            pygame.draw.line(surface, color,
+                             (x + 6 * math.cos(a), y + 6 * math.sin(a)),
+                             (x + 9 * math.cos(a), y + 9 * math.sin(a)), 2)
+
+
 def card_width_hint(width: int, card_min: int = CARD_MIN) -> int:
     columns = flow.column_count(width - 40, card_min, GAP)
     return flow.column_width(width - 40, columns, GAP)
@@ -334,8 +411,10 @@ def _apply(index: int):
     return False, result.get("error") or "the daemon did not accept the caps"
 
 
-def render_screenshots(outdir: str, size=(1280, 800)) -> list[str]:
+def render_screenshots(outdir: str, size=(1280, 800), theme: str | None = None) -> list[str]:
     """Render one frame per tab and save PNGs, without entering the loop."""
+    if theme:
+        apply_theme(theme)
     os.makedirs(outdir, exist_ok=True)
     app = App(size)
     state, telemetry = app.snapshot_pair()
@@ -357,7 +436,12 @@ def main(argv=None) -> int:
                         help="window size, WxH (default 1280x800)")
     parser.add_argument("--screenshot", metavar="DIR",
                         help="render every tab to DIR as PNG and exit")
+    parser.add_argument("--theme", choices=("predator", "dark", "light"),
+                        default="predator",
+                        help="predator = PredatorSense replica (default); "
+                             "dark = left icon rail; light = AcerSense-style tabs")
     options = parser.parse_args(argv)
+    apply_theme(options.theme)
     width, _, height = options.size.partition("x")
     size = (int(width or 1280), int(height or 800))
     if options.screenshot:

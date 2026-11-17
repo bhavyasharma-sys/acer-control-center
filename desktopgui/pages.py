@@ -7,7 +7,7 @@ frames.
 
 from __future__ import annotations
 
-from .theme import COOL, HOT, MUTED, TEXT, UNAVAILABLE, WARM
+from .theme import C, UNAVAILABLE
 from .widgets import (
     BarRow,
     Button,
@@ -29,12 +29,12 @@ IDLE_OPTIONS = [("Off", 0)] + [(f"{s} s", s) for s in (5, 10, 15, 20, 25, 30)]
 
 def temperature_color(value):
     if value is None:
-        return MUTED
+        return C().MUTED
     if value >= 85:
-        return HOT
+        return C().HOT
     if value >= 70:
-        return WARM
-    return COOL
+        return C().WARM
+    return C().COOL
 
 
 class Pages:
@@ -42,38 +42,38 @@ class Pages:
         # dashboard
         self.modes = Segmented([], selected=None)
         self.apply_button = Button("Apply", primary=True)
-        self.apply_status = TextBlock("No apply yet.", 13, MUTED)
+        self.apply_status = TextBlock("No apply yet.", 13, C().MUTED)
         self.cpu_clock = StatRow("CPU clock (avg)")
         self.cpu_temp = StatRow("CPU temperature")
         self.gpu_clock = StatRow("GPU clock")
         self.gpu_temp = StatRow("GPU temperature")
         self.cpu_use = BarRow("CPU use")
-        self.gpu_use = BarRow("GPU use", COOL)
+        self.gpu_use = BarRow("GPU use", C().COOL)
         self.gauge = GaugeBlock()
         self.gauge_note = TextBlock(
             "Average of online cores · scale from the detected cpufreq maximum",
-            11, MUTED, center=True)
-        self.cpu_fan = BarRow("CPU fan", WARM)
-        self.gpu_fan = BarRow("GPU fan", WARM)
+            11, C().MUTED, center=True)
+        self.cpu_fan = BarRow("CPU fan", C().WARM)
+        self.gpu_fan = BarRow("GPU fan", C().WARM)
         self.fan_mode = Segmented([("Automatic", "auto"), ("Maximum", "max")])
         self.mem = BarRow("Memory", (74, 163, 224))
         self.disk = BarRow("Storage /", (74, 163, 224))
-        self.vram = BarRow("VRAM", COOL)
-        self.sources = TextBlock("/proc/meminfo · statvfs on / · NVIDIA telemetry", 11, MUTED)
-        self.target_name = TextBlock("—", 20, TEXT, bold=True)
+        self.vram = BarRow("VRAM", C().COOL)
+        self.sources = TextBlock("/proc/meminfo · statvfs on / · NVIDIA telemetry", 11, C().MUTED)
+        self.target_name = TextBlock("—", 20, C().TEXT, bold=True)
         self.target_cpu = StatRow("CPU limit (software request)")
         self.target_gpu = StatRow("GPU limit (software request)")
         self.target_note = TextBlock(
             "Selecting a mode only stores the target. Caps are written when you "
-            "press Apply and each write is verified by readback.", 12, MUTED)
-        self.apply_result = TextBlock("", 12, MUTED)
+            "press Apply and each write is verified by readback.", 12, C().MUTED)
+        self.apply_result = TextBlock("", 12, C().MUTED)
 
         # cooling
         self.cooling_fan = Segmented([("Automatic", "auto"), ("Maximum", "max")], big=True)
         self.cooling_note = TextBlock(
             "Maximum pins the fans at full speed; automatic returns control to "
-            "the firmware curve.", 12, MUTED)
-        self.cooling_status = TextBlock("", 12, MUTED)
+            "the firmware curve.", 12, C().MUTED)
+        self.cooling_status = TextBlock("", 12, C().MUTED)
         self.c_cpu_fan = StatRow("CPU fan")
         self.c_gpu_fan = StatRow("GPU fan")
         self.c_cpu_temp = StatRow("CPU temperature")
@@ -82,13 +82,13 @@ class Pages:
 
         # keyboard
         self.brightness = SliderRow("Brightness", 0)
-        self.brightness_note = TextBlock("The daemon writes the EC on release.", 12, MUTED)
+        self.brightness_note = TextBlock("The daemon writes the EC on release.", 12, C().MUTED)
         self.swatches = SwatchRow(SWATCHES)
         self.breathing = Button("Breathing: unknown")
         self.idle = Segmented(IDLE_OPTIONS)
         self.idle_note = TextBlock(
             "Stored for the desktop session, which fades the keyboard after "
-            "inactivity and restores it when you return.", 12, MUTED)
+            "inactivity and restores it when you return.", 12, C().MUTED)
 
         # performance
         self.steppers: list[StepperRow] = []
@@ -96,7 +96,7 @@ class Pages:
             self.steppers.append(StepperRow(f"Profile {index + 1} CPU", 30))
             self.steppers.append(StepperRow(f"Profile {index + 1} GPU", 60))
         self.save_button = Button("Save profiles", primary=True)
-        self.profile_status = TextBlock("", 12, MUTED)
+        self.profile_status = TextBlock("", 12, C().MUTED)
 
         # battery
         self.b_percent = StatRow("Charge")
@@ -112,7 +112,7 @@ class Pages:
         self.s_how = TextBlock(
             "A pygame desktop window over a standard-library Python backend. "
             "Hardware calls go to acer-control-daemon on the system D-Bus via "
-            "busctl; telemetry is read from /proc and /sys.", 12, MUTED)
+            "busctl; telemetry is read from /proc and /sys.", 12, C().MUTED)
 
     # ------------------------------------------------------------ state in
 
@@ -128,13 +128,13 @@ class Pages:
         last = state.get("last_apply")
         if last is None:
             self.apply_status.text = "No apply yet."
-            self.apply_status.color = MUTED
+            self.apply_status.color = C().MUTED
         elif last.get("ok"):
             self.apply_status.text = "Applied and verified by readback."
-            self.apply_status.color = COOL
+            self.apply_status.color = C().COOL
         else:
             self.apply_status.text = last.get("error") or "Not applied."
-            self.apply_status.color = HOT
+            self.apply_status.color = C().HOT
 
         self.cpu_clock.value = None if telemetry.get("cpu_clock_mhz") is None \
             else f"{telemetry['cpu_clock_mhz']} MHz"
@@ -189,7 +189,7 @@ class Pages:
         if last and (last.get("cpu_message") or last.get("error")):
             self.apply_result.text = last.get("error") or \
                 f"CPU: {last.get('cpu_message')}\nGPU: {last.get('gpu_message')}"
-            self.apply_result.color = COOL if last.get("ok") else HOT
+            self.apply_result.color = C().COOL if last.get("ok") else C().HOT
         else:
             self.apply_result.text = ""
 
