@@ -14,7 +14,7 @@ impl ControlCenter {
                             RichText::new(name).color(if selected { ACCENT } else { TEXT }),
                         )
                         .selected(selected)
-                        .fill(if selected { Color32::from_rgb(22, 56, 61) } else { SURFACE })
+                        .fill(if selected { Color32::from_rgb(12, 48, 62) } else { SURFACE })
                         .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }));
                         if ui.add(button).clicked() {
                             self.power_profile_index = index;
@@ -29,7 +29,7 @@ impl ControlCenter {
                 });
                 ui.add_space(12.0);
                 ui.columns(3, |columns| {
-                    egui::Frame::new().fill(Color32::from_rgb(12, 16, 21))
+                    egui::Frame::new().fill(Color32::from_rgb(8, 13, 19))
                         .stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
                         .show(&mut columns[0], |ui| {
                             ui.label(RichText::new("SYSTEM").small().strong().color(ACCENT));
@@ -60,7 +60,7 @@ impl ControlCenter {
                                 telemetry.gpu_usage_percent.map(|v| format!("{v} %")).unwrap_or_else(|| "Unavailable".into()));
                         });
                     Self::dashboard_dial(&mut columns[1], &telemetry);
-                    egui::Frame::new().fill(Color32::from_rgb(12, 16, 21))
+                    egui::Frame::new().fill(Color32::from_rgb(8, 13, 19))
                         .stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
                         .show(&mut columns[2], |ui| {
                             ui.label(RichText::new("FAN SPEED CONTROL").small().strong().color(ACCENT));

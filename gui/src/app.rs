@@ -31,17 +31,17 @@ impl Page {
     }}
 }
 
-const APP_BG: Color32 = Color32::from_rgb(17, 20, 24);
-const SIDEBAR_BG: Color32 = Color32::from_rgb(20, 24, 29);
-const SURFACE: Color32 = Color32::from_rgb(26, 31, 37);
-const SURFACE_HOVER: Color32 = Color32::from_rgb(34, 40, 47);
-const BORDER: Color32 = Color32::from_rgb(46, 53, 61);
-const TEXT: Color32 = Color32::from_rgb(229, 233, 237);
-const MUTED: Color32 = Color32::from_rgb(151, 160, 169);
-const ACCENT: Color32 = Color32::from_rgb(95, 174, 166);
-const COOL: Color32 = Color32::from_rgb(89, 190, 170);
-const WARM: Color32 = Color32::from_rgb(241, 177, 82);
-const HOT: Color32 = Color32::from_rgb(226, 105, 92);
+const APP_BG: Color32 = Color32::from_rgb(7, 10, 15);
+const SIDEBAR_BG: Color32 = Color32::from_rgb(10, 14, 21);
+const SURFACE: Color32 = Color32::from_rgb(15, 22, 30);
+const SURFACE_HOVER: Color32 = Color32::from_rgb(22, 34, 44);
+const BORDER: Color32 = Color32::from_rgb(32, 51, 62);
+const TEXT: Color32 = Color32::from_rgb(231, 240, 245);
+const MUTED: Color32 = Color32::from_rgb(133, 154, 164);
+const ACCENT: Color32 = Color32::from_rgb(43, 204, 220);
+const COOL: Color32 = Color32::from_rgb(59, 224, 179);
+const WARM: Color32 = Color32::from_rgb(255, 188, 75);
+const HOT: Color32 = Color32::from_rgb(255, 79, 96);
 
 #[derive(Clone, Default)]
 struct TelemetrySnapshot {
@@ -421,7 +421,7 @@ impl ControlCenter {
             .corner_radius(10.0)
             .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
-                ui.label(RichText::new("CPU CLOCK SPEED").small().strong().color(MUTED));
+                ui.label(RichText::new("CPU CLOCK SPEED  ·  SCALE IN GHz").small().strong().color(MUTED));
                 let (rect, _) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 254.0),
                     egui::Sense::hover(),
@@ -441,10 +441,53 @@ impl ControlCenter {
                         .map(|step| points(end * step as f32 / 28.0))
                         .collect::<Vec<_>>()
                 };
+                let thermal_radius = radius + 9.0;
+                let thermal_point = |fraction: f32| {
+                    let angle = std::f32::consts::PI * (1.0 - fraction);
+                    egui::pos2(
+                        center.x + thermal_radius * angle.cos(),
+                        center.y - thermal_radius * angle.sin(),
+                    )
+                };
+                let thermal_arc = |start: f32, end: f32| {
+                    (0..=24)
+                        .map(|step| thermal_point(start + (end - start) * step as f32 / 24.0))
+                        .collect::<Vec<_>>()
+                };
+                painter.add(egui::Shape::line(
+                    thermal_arc(0.0, 1.0),
+                    Stroke::new(3.0, Color32::from_rgb(36, 46, 55)),
+                ));
+                if let Some(temperature) = telemetry.cpu_temperature {
+                    let fraction = (temperature as f32 / 100.0).clamp(0.0, 1.0);
+                    for (start, end, color) in [(0.0, 0.68, COOL), (0.68, 0.86, WARM), (0.86, 1.0, HOT)] {
+                        let visible_end = fraction.min(end);
+                        if visible_end > start {
+                            painter.add(egui::Shape::line(
+                                thermal_arc(start, visible_end),
+                                Stroke::new(4.0, color),
+                            ));
+                        }
+                    }
+                }
                 painter.add(egui::Shape::line(
                     arc(1.0),
-                    Stroke::new(8.0, Color32::from_rgb(45, 57, 67)),
+                    Stroke::new(8.0, Color32::from_rgb(35, 48, 59)),
                 ));
+                for mark in 0..=4 {
+                    let fraction = mark as f32 / 4.0;
+                    let point = points(fraction);
+                    let direction = egui::vec2(point.x - center.x, point.y - center.y);
+                    let inner = egui::pos2(center.x + direction.x * 0.88, center.y + direction.y * 0.88);
+                    let outer = egui::pos2(center.x + direction.x * 1.02, center.y + direction.y * 1.02);
+                    painter.line_segment([inner, outer], Stroke::new(1.5, MUTED));
+                    let label = telemetry.cpu_clock_max_mhz
+                        .map(|max| format!("{:.1}", max as f32 * fraction / 1000.0))
+                        .unwrap_or_else(|| "—".to_owned());
+                    let label_pos = egui::pos2(center.x + direction.x * 1.17, center.y + direction.y * 1.17);
+                    painter.text(label_pos, egui::Align2::CENTER_CENTER, label,
+                        egui::FontId::proportional(9.0), MUTED);
+                }
                 let clock_fraction = match (telemetry.cpu_clock_mhz, telemetry.cpu_clock_max_mhz) {
                     (Some(current), Some(maximum)) if maximum > 0 => {
                         Some((current as f32 / maximum as f32).clamp(0.0, 1.0))
@@ -452,20 +495,26 @@ impl ControlCenter {
                     _ => None,
                 };
                 if let Some(fraction) = clock_fraction {
+                    let active_arc = arc(fraction);
                     painter.add(egui::Shape::line(
-                        arc(fraction),
-                        Stroke::new(8.0, ACCENT),
+                        active_arc.clone(),
+                        Stroke::new(17.0, Color32::from_rgba_unmultiplied(43, 204, 220, 42)),
+                    ));
+                    painter.add(egui::Shape::line(
+                        active_arc,
+                        Stroke::new(7.0, ACCENT),
                     ));
                     let needle = points(fraction);
-                    painter.line_segment(
-                        [center, egui::pos2(
-                            center.x + (needle.x - center.x) * 0.84,
-                            center.y + (needle.y - center.y) * 0.84,
-                        )],
-                        Stroke::new(2.0, Color32::from_rgb(180, 236, 228)),
+                    let needle_tip = egui::pos2(
+                        center.x + (needle.x - center.x) * 0.82,
+                        center.y + (needle.y - center.y) * 0.82,
                     );
+                    painter.line_segment([center, needle_tip], Stroke::new(5.0, Color32::from_rgb(19, 69, 81)));
+                    painter.line_segment([center, needle_tip], Stroke::new(1.8, Color32::from_rgb(218, 250, 250)));
                 }
-                painter.circle_filled(center, 7.0, Color32::from_rgb(180, 236, 228));
+                painter.circle_filled(center, 8.0, Color32::from_rgb(12, 24, 31));
+                painter.circle_stroke(center, 8.0, Stroke::new(2.0, ACCENT));
+                painter.circle_filled(center, 2.5, TEXT);
                 let clock_text = telemetry
                     .cpu_clock_mhz
                     .map(|value| value.to_string())
@@ -488,23 +537,6 @@ impl ControlCenter {
                     egui::pos2(center.x, center.y + 31.0),
                     egui::Align2::CENTER_CENTER,
                     "MHz average",
-                    egui::FontId::proportional(10.0),
-                    MUTED,
-                );
-                let max_label = telemetry.cpu_clock_max_mhz
-                    .map(|mhz| format!("{:.1} GHz", mhz as f32 / 1000.0))
-                    .unwrap_or_else(|| "max".to_owned());
-                painter.text(
-                    egui::pos2(center.x - radius - 2.0, center.y + 12.0),
-                    egui::Align2::LEFT_CENTER,
-                    "0",
-                    egui::FontId::proportional(10.0),
-                    MUTED,
-                );
-                painter.text(
-                    egui::pos2(center.x + radius + 2.0, center.y + 12.0),
-                    egui::Align2::RIGHT_CENTER,
-                    max_label,
                     egui::FontId::proportional(10.0),
                     MUTED,
                 );
@@ -547,17 +579,17 @@ impl ControlCenter {
         visuals.override_text_color = Some(TEXT);
         visuals.window_fill = SURFACE;
         visuals.panel_fill = APP_BG;
-        visuals.extreme_bg_color = Color32::from_rgb(13, 16, 19);
-        visuals.faint_bg_color = Color32::from_rgb(23, 27, 32);
-        visuals.selection.bg_fill = Color32::from_rgb(42, 76, 78);
+        visuals.extreme_bg_color = Color32::from_rgb(5, 7, 10);
+        visuals.faint_bg_color = Color32::from_rgb(11, 16, 21);
+        visuals.selection.bg_fill = Color32::from_rgb(16, 57, 66);
         visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
         visuals.widgets.noninteractive.bg_fill = SURFACE;
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(36, 42, 49);
+        visuals.widgets.inactive.bg_fill = Color32::from_rgb(20, 28, 36);
         visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
         visuals.widgets.hovered.bg_fill = SURFACE_HOVER;
         visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-        visuals.widgets.active.bg_fill = Color32::from_rgb(42, 76, 78);
+        visuals.widgets.active.bg_fill = Color32::from_rgb(19, 67, 76);
         visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
         visuals.widgets.open.bg_fill = SURFACE_HOVER;
         visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, BORDER);
