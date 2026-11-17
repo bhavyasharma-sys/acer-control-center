@@ -154,12 +154,7 @@ fn nvidia_power_range() -> Result<(f64, f64), String> {
 
 fn nvidia_current_power_limit() -> Result<f64, String> {
     let output = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=power.limit",
-            "--format=csv,noheader,nounits",
-            "-i",
-            "0",
-        ])
+        .args(["-q", "-d", "POWER", "-i", "0"])
         .output()
         .map_err(|e| format!("Could not query the NVIDIA power limit: {e}"))?;
     if !output.status.success() {
@@ -170,11 +165,11 @@ fn nvidia_current_power_limit() -> Result<f64, String> {
     }
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .next()
-        .ok_or_else(|| "nvidia-smi returned no current power limit".to_string())?
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "NVIDIA driver does not report a numeric current power limit".into())
+        .find(|line| line.contains("Current Power Limit"))
+        .and_then(|line| line.split_once(':').map(|(_, value)| value.trim().to_string()))
+        .and_then(|value| value.split_whitespace().next().map(str::to_owned))
+        .and_then(|value| value.parse::<f64>().ok())
+        .ok_or_else(|| "NVIDIA query did not report a numeric Current Power Limit".into())
 }
 
 pub fn set_gpu_power_cap(watts: u32) -> Result<(), String> {
