@@ -45,32 +45,35 @@ jobs:
         run: |
           log="${RUNNER_TEMP:-/tmp}/cargo-check.log"
           cargo --version; rustc --version
-          # One annotation carrying the whole error block: colours are disabled
-          # so the compiler output can be filtered reliably, and newlines are
-          # escaped the way workflow commands require.
+          # $1 = annotation title, $2 = a --message-format short log, so every
+          # diagnostic is one line and the errors are not buried under warnings.
           announce() {
             local detail
-            detail="$(sed -e 's/\x1b\[[0-9;]*m//g' "$log" \
-              | grep -E '^(error|warning)(\[|:)|^ +--> |^ +\|' \
-              | grep -v '^warning: unused manifest key' \
-              | head -n 120)"
-            [ -n "$detail" ] || detail="$(head -n 40 "$log")"
+            detail="$(sed -e 's/\x1b\[[0-9;]*m//g' "$2" | grep -E ': error' | head -n 60)"
+            [ -n "$detail" ] || detail="$(sed -e 's/\x1b\[[0-9;]*m//g' "$2" | head -n 60)"
             detail="${detail//%/%25}"
             detail="${detail//$'\n'/%0A}"
             echo "::error title=$1::${detail//$'\r'/%0D}"
           }
+          short_log="${RUNNER_TEMP:-/tmp}/cargo-check-short.log"
           status=0
           : >"$log"
           cargo check --locked --color never --manifest-path daemon/Cargo.toml >>"$log" 2>&1 || status=1
           if [ "$status" -ne 0 ]; then
-            cat "$log"; announce "daemon cargo check failed"; exit 1
+            cat "$log"
+            cargo check --locked --color never --message-format short \
+              --manifest-path daemon/Cargo.toml >"$short_log" 2>&1 || true
+            announce "daemon cargo check failed" "$short_log"; exit 1
           fi
           : >"$log"
           ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" \
             cargo check --locked --color never --manifest-path gui/Cargo.toml >>"$log" 2>&1 || status=1
           cat "$log"
           if [ "$status" -ne 0 ]; then
-            announce "gui cargo check failed"; exit 1
+            ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" \
+              cargo check --locked --color never --message-format short \
+              --manifest-path gui/Cargo.toml >"$short_log" 2>&1 || true
+            announce "gui cargo check failed" "$short_log"; exit 1
           fi
 
       - name: Run unit tests
