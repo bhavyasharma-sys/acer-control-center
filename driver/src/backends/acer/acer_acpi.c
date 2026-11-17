@@ -151,12 +151,28 @@ static int acer_acpi_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/* platform_driver.remove returned int up to 6.10, became a void callback
+ * (unioned with .remove_new) in 6.11-6.12 and a plain void member in 6.13+.
+ * Match the callback signature to the kernel being built against, exactly
+ * like acer_keyboard.h does, or old kernels fail with
+ * -Werror=incompatible-pointer-types.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
+static int acer_acpi_remove(struct platform_device *pdev)
+{
+	pr_debug("acer_acpi driver remove\n");
+	acer_keyboard_remove_interface(&acer_acpi_interface);
+	active_driver_data = NULL;
+	return 0;
+}
+#else
 static void acer_acpi_remove(struct platform_device *pdev)
 {
 	pr_debug("acer_acpi driver remove\n");
 	acer_keyboard_remove_interface(&acer_acpi_interface);
 	active_driver_data = NULL;
 }
+#endif
 
 static void acer_acpi_notify(acpi_handle handle, u32 event, void *context)
 {

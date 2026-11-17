@@ -97,6 +97,13 @@ jobs:
               grep -E '^(error|warning)(\[|:)|^(failures|test result):' -A 8 "$log" | head -n 400
               echo '```'
             } >>"$GITHUB_STEP_SUMMARY"
+            # Surface the failing tests / compile errors as an annotation so
+            # the reason is readable without the raw log archive.
+            detail="$(grep -E ': error|FAILED$|panicked at' "$log" | head -n 40)"
+            [ -n "$detail" ] || detail="$(tail -n 40 "$log")"
+            detail="${detail//%/%25}"
+            detail="${detail//$'\n'/%0A}"
+            echo "::error title=cargo test failed::${detail//$'\r'/%0D}"
             exit 1
           fi
           cat "$log"
