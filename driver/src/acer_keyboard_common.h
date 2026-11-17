@@ -63,8 +63,8 @@ void acer_keyboard_remove_driver(struct acer_keyboard_driver *tk_driver);
 /**
  * Basically a copy of the existing report event but doesn't report unknown events
  */
-inline bool sparse_keymap_report_known_event(struct input_dev *dev, unsigned int code,
-					unsigned int value, bool autorelease)
+static inline bool sparse_keymap_report_known_event(struct input_dev *dev, unsigned int code,
+					  unsigned int value, bool autorelease)
 {
 	const struct key_entry *ke =
 		sparse_keymap_entry_from_scancode(dev, code);
@@ -90,7 +90,7 @@ struct color_list_t {
 /**
  * Commonly used standard colors
  */
-static struct color_list_t color_list = {
+static const struct color_list_t color_list = {
 	.size = 8,
 	.colors = {
 		{ .name = "BLACK",    .code = 0x000000 },  // 0

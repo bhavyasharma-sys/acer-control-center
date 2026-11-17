@@ -85,4 +85,12 @@ impl HardwareBackend for SysfsBackend {
     fn set_fan_auto(&self) -> Result<(), String> {
         Err("Automatic fan mode is not supported by SysfsBackend".into())
     }
+
+    fn set_cpu_power_cap(&self, _watts: u32) -> Result<(), String> {
+        Err("CPU power limits are not supported by SysfsBackend".into())
+    }
+
+    fn set_gpu_power_cap(&self, _watts: u32) -> Result<(), String> {
+        Err("GPU power limits are not supported by SysfsBackend".into())
+    }
 }

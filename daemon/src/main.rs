@@ -8,6 +8,7 @@ mod state;
 mod sysfs;
 
 mod models;
+mod power;
 
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use anyhow::{bail, Result};
 use backend::HardwareBackend;
 use dbus::AcerControlDBus;
 use hardware::HardwarePlatform;
-use models::alg_al15g_53::AlgAl15g53Backend;
+use models::clevo_dchu::ClevoDchuBackend;
 use service::AcerService;
 use zbus::connection::Builder;
 
@@ -55,9 +56,9 @@ async fn main() -> Result<()> {
     }
 
     let backend = match hardware.platform {
-        HardwarePlatform::AlgAl15g53 => {
+        HardwarePlatform::ClevoDchu => {
             Arc::new(
-                    AlgAl15g53Backend::new()
+                    ClevoDchuBackend::new()
                         .map_err(anyhow::Error::msg)?
                 )
         }

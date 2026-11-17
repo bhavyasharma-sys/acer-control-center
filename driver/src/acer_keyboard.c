@@ -172,8 +172,14 @@ EXPORT_SYMBOL(acer_keyboard_remove_driver);
 #define INTEL_FAM6_RAPTORLAKE_P		0xBA
 #define INTEL_FAM6_RAPTORLAKE_S		0xBF
 
-// ALDERLAKE_N doesn't seem to be present in the current kernel header at all
-#define INTEL_ALDERLAKE_N 			INTEL_FAM6_ALDERLAKE_N
+// The renamed (6.12+) CPU family headers do not provide INTEL_ALDERLAKE_N.
+// Define it as an encoded VFM value (the format expected by X86_MATCH_VFM)
+// so the newer branch compiles on those kernels.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#ifndef INTEL_ALDERLAKE_N
+#define INTEL_ALDERLAKE_N		IFM(6, 0xBE)
+#endif
+#endif
 
 // Compatibility defines: kernel 6.12 renamed the Intel CPU model defines, see e.g.
 // https://github.com/torvalds/linux/commit/6568fc18c2f62 and

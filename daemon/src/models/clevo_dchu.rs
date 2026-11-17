@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-pub struct AlgAl15g53Backend {
+pub struct ClevoDchuBackend {
     inner: SysfsBackend,
     context: *mut ffi::AcerContext,
     current_color: Arc<Mutex<(u8, u8, u8)>>,
@@ -21,7 +21,7 @@ pub struct AlgAl15g53Backend {
     state: StateStore,
 }
 
-impl AlgAl15g53Backend {
+impl ClevoDchuBackend {
     pub fn new() -> Result<Self, String> {
         let context = unsafe { ffi::acer_open() };
 
@@ -127,7 +127,7 @@ impl AlgAl15g53Backend {
     }
 }
 
-impl Drop for AlgAl15g53Backend {
+impl Drop for ClevoDchuBackend {
     fn drop(&mut self) {
         self.animation_running
             .store(false, Ordering::SeqCst);
@@ -146,17 +146,17 @@ impl Drop for AlgAl15g53Backend {
     }
 }
 
-unsafe impl Send for AlgAl15g53Backend {}
-unsafe impl Sync for AlgAl15g53Backend {}
+unsafe impl Send for ClevoDchuBackend {}
+unsafe impl Sync for ClevoDchuBackend {}
 
-impl Default for AlgAl15g53Backend {
+impl Default for ClevoDchuBackend {
     fn default() -> Self {
         Self::new()
             .expect("Failed to initialize ALG AL15G-53 backend")
     }
 }
 
-impl HardwareBackend for AlgAl15g53Backend {
+impl HardwareBackend for ClevoDchuBackend {
     fn capabilities(&self) -> HardwareCapabilities {
         HardwareCapabilities {
             rgb_keyboard: true,
@@ -302,9 +302,17 @@ impl HardwareBackend for AlgAl15g53Backend {
     fn fan_max_selected(&self) -> bool {
         self.fan_max.load(Ordering::Relaxed)
     }
+
+    fn set_cpu_power_cap(&self, watts: u32) -> Result<(), String> {
+        crate::power::set_cpu_power_cap(watts)
+    }
+
+    fn set_gpu_power_cap(&self, watts: u32) -> Result<(), String> {
+        crate::power::set_gpu_power_cap(watts)
+    }
 }
 
-impl HardwareAnimationBackend for AlgAl15g53Backend {
+impl HardwareAnimationBackend for ClevoDchuBackend {
     fn start_breathing(&self) -> Result<(), String> {
         self.stop_animation_internal();
 

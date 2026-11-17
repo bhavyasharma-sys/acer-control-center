@@ -17,12 +17,18 @@ Modern Linux control center for supported Acer gaming laptops.
 
 ## Supported Hardware
 
-Currently tested on
+Hardware reported/tested by users:
 
 - Acer ALG AL15G-53
+- Acer Aspire 7 A715-79G (Core 5 210H, GeForce RTX 3050 6 GB; keyboard
+  backlight driver reported working; CPU/GPU power-limit controls have not yet
+  been validated on hardware)
 
-Additional Clevo-based Acer laptops may work but are currently untested. The
-current hardware backend supports the Acer ALG AL15G-53 only.
+The daemon detects Acer systems exposing the `acer_acpi` interface; individual
+controls still depend on the laptop firmware and Linux driver support. CPU
+power caps use Intel RAPL, while NVIDIA GPU caps use `nvidia-smi`. Either control
+may be unavailable or reject a requested value on a particular laptop; the
+Performance page reports this instead of claiming an unsupported cap was set.
 
 The graphical application does not require GTK or Libadwaita. It uses the
 system's X11 or Wayland session and communicates with the existing system
@@ -220,9 +226,7 @@ packaging/
 
 ### Planned
 
-- Performance profiles
 - Battery management
-- Manual fan control
 - Firmware updates
 
 ## License

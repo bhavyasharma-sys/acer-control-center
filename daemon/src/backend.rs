@@ -23,6 +23,8 @@ pub trait HardwareBackend: Send + Sync {
 
     fn set_fan_max(&self) -> Result<(), String>;
     fn set_fan_auto(&self) -> Result<(), String>;
+    fn set_cpu_power_cap(&self, watts: u32) -> Result<(), String>;
+    fn set_gpu_power_cap(&self, watts: u32) -> Result<(), String>;
     fn fan_max_selected(&self) -> bool {
         false
     }

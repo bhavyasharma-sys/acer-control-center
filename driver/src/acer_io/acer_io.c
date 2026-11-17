@@ -83,7 +83,7 @@ static long acer_ioctl_interface(struct file *file, unsigned int cmd, unsigned l
 	const char str_no_if[] = "";
 	char *str_acer_if;
 	
-	pr_err("acer_io ioctl cmd = 0x%x\n", cmd);
+	pr_debug("acer_io ioctl cmd = 0x%x\n", cmd);
 	
 	switch (cmd) {
 		case R_CL_HW_IF_STR:

@@ -96,6 +96,13 @@ impl AcerControlDBus {
             .map_err(|e| e.to_string())
     }
 
+    pub fn set_power_caps(&self, cpu_watts: u32, gpu_watts: u32) -> Result<(String, String), String> {
+        let proxy = self.proxy()?;
+        proxy
+            .call::<_, _, (String, String)>("SetPowerCaps", &(cpu_watts, gpu_watts))
+            .map_err(|e| e.to_string())
+    }
+
     pub fn fan_max_selected(&self) -> Result<bool, String> {
         let proxy = self.proxy()?;
         proxy

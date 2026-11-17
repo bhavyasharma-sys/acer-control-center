@@ -93,6 +93,10 @@ impl AcerControlDBus {
             .map_err(zbus::fdo::Error::Failed)
     }
 
+    async fn set_power_caps(&self, cpu_watts: u32, gpu_watts: u32) -> (String, String) {
+        self.service.set_power_caps(cpu_watts, gpu_watts)
+    }
+
     async fn get_fan_max_selected(&self) -> bool {
         self.service.fan_max_selected()
     }

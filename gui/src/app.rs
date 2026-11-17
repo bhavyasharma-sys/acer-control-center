@@ -41,6 +41,8 @@ pub(crate) struct ControlCenter {
     notice: Option<(bool, String, Instant)>,
     fan_mode: components::FanMode,
     fan_mode_confirmed: bool,
+    power_profiles: [[u32; 2]; 3],
+    power_profile_index: usize,
     animation_mode: components::AnimationMode,
     animation_mode_confirmed: bool,
     idle_timeout_seconds: u32,
@@ -91,6 +93,7 @@ impl ControlCenter {
                 )
             })
             .unwrap_or((components::AnimationMode::Off, false));
+        let (power_profiles, power_profile_index) = power_profiles::load();
         let idle_timeout_seconds = keyboard_idle::load_timeout();
         let stored_minimize_to_tray = keyboard_idle::load_minimize_to_tray();
         // Keep the saved preference visible even if the tray host is slow to
@@ -111,6 +114,8 @@ impl ControlCenter {
             }).or_else(|| (!tray_ready && stored_minimize_to_tray).then(|| (false, "Minimize to tray remains enabled, but the tray service is unavailable. The window may stay open until the desktop tray is ready.".to_owned(), Instant::now()))),
             fan_mode,
             fan_mode_confirmed,
+            power_profiles,
+            power_profile_index,
             animation_mode,
             animation_mode_confirmed,
             idle_timeout_seconds,
@@ -245,6 +250,7 @@ impl ControlCenter {
 
 }
 
+mod power_profiles;
 mod ui;
 
 impl Drop for ControlCenter {

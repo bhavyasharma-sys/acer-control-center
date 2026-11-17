@@ -62,6 +62,16 @@ impl AcerService {
         self.backend.set_fan_auto()
     }
 
+    pub fn set_power_caps(&self, cpu_watts: u32, gpu_watts: u32) -> (String, String) {
+        let cpu = self.backend.set_cpu_power_cap(cpu_watts)
+            .map(|()| format!("CPU cap applied: {cpu_watts} W"))
+            .unwrap_or_else(|error| format!("CPU cap not applied: {error}"));
+        let gpu = self.backend.set_gpu_power_cap(gpu_watts)
+            .map(|()| format!("GPU cap applied: {gpu_watts} W"))
+            .unwrap_or_else(|error| format!("GPU cap not applied: {error}"));
+        (cpu, gpu)
+    }
+
     pub fn fan_max_selected(&self) -> bool {
         self.backend.fan_max_selected()
     }

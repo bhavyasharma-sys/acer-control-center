@@ -159,7 +159,63 @@ impl ControlCenter {
                 ui.label(RichText::new(timeout_status).weak().small());
                 Self::keyboard_preview(ui, self.color, self.brightness);
             }
-            Page::Performance => { ui.label(RichText::new("Performance profiles are planned for a future release.").color(MUTED)); }
+            Page::Performance => {
+                ui.label(RichText::new("POWER PROFILES").small().strong().color(MUTED));
+                ui.add_space(8.0);
+                let selected = components::segmented_choice(
+                    ui,
+                    self.power_profile_index,
+                    &[(0, "Performance"), (1, "Balanced"), (2, "Battery Saver")],
+                );
+                if let Some(index) = selected {
+                    self.power_profile_index = index;
+                    if let Err(error) = super::power_profiles::save(self.power_profiles, index) {
+                        self.set_notice(false, format!("Could not save power profile: {error}"));
+                    }
+                }
+
+                let profile_index = self.power_profile_index;
+                let mut changed = false;
+                ui.add_space(14.0);
+                ui.label(RichText::new("CAPS FOR THIS PROFILE").small().strong().color(MUTED));
+                ui.horizontal(|ui| {
+                    ui.label("CPU");
+                    changed |= ui.add(
+                        egui::DragValue::new(&mut self.power_profiles[profile_index][0])
+                            .range(1..=500)
+                            .suffix(" W"),
+                    ).changed();
+                    ui.add_space(18.0);
+                    ui.label("GPU");
+                    changed |= ui.add(
+                        egui::DragValue::new(&mut self.power_profiles[profile_index][1])
+                            .range(1..=500)
+                            .suffix(" W"),
+                    ).changed();
+                });
+                if changed {
+                    if let Err(error) = super::power_profiles::save(self.power_profiles, profile_index) {
+                        self.set_notice(false, format!("Could not save power limits: {error}"));
+                    }
+                }
+
+                ui.add_space(12.0);
+                if ui.button("Apply power caps").clicked() {
+                    let [cpu_watts, gpu_watts] = self.power_profiles[profile_index];
+                    let result = libacercontrol::dbus::AcerControlDBus::new()
+                        .and_then(|bus| bus.set_power_caps(cpu_watts, gpu_watts));
+                    match result {
+                        Ok((cpu, gpu)) => {
+                            let success = cpu.starts_with("CPU cap applied")
+                                && gpu.starts_with("GPU cap applied");
+                            self.set_notice(success, format!("{cpu}. {gpu}."));
+                        }
+                        Err(error) => self.set_notice(false, format!("Could not contact the power-control daemon: {error}")),
+                    }
+                }
+                ui.add_space(10.0);
+                ui.label(RichText::new("Caps are saved per profile. CPU limits use Intel RAPL; GPU limits use the NVIDIA driver. Each requested limit is checked against the controls your hardware exposes, and unsupported or rejected caps are reported rather than treated as applied.").color(MUTED));
+            }
             Page::Battery => { ui.label(RichText::new("Battery charge management is planned for a future release.").color(MUTED)); }
             Page::Settings => {
                 ui.add_space(12.0);

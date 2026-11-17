@@ -13,7 +13,7 @@ const INTERFACE_SIZE: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HardwarePlatform {
     Unknown,
-    AlgAl15g53,
+    ClevoDchu,
 }
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ fn c_string(buffer: &[c_char]) -> String {
 impl HardwareInfo {
     fn from_ffi(info: &ffi::AcerHardwareInfo) -> Self {
         let platform = match info.platform {
-            1 => HardwarePlatform::AlgAl15g53,
+            1 => HardwarePlatform::ClevoDchu,
             _ => HardwarePlatform::Unknown,
         };
 
