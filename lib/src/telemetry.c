@@ -14,17 +14,26 @@ static int read_dchu_fan_rpm(AcerContext *ctx, unsigned int fan_index, int *rpm)
     if (!ctx || !rpm || fan_index > 2)
         return -EINVAL;
 
+    /* Defensive bounds check: the tachometer bytes must stay inside the
+     * status buffer even if the index math ever changes. */
+    if (offset + 1 >= ACER_DCHU_STATUS_SIZE)
+        return -EINVAL;
+
     if (acer_ioctl_read(ctx, R_CL_DCHU_STATUS, status) < 0)
         return -errno;
 
     raw_tach = (uint16_t)(((uint16_t)status[offset] << 8) | status[offset + 1]);
+    /* A zero tachometer value means the fan is stopped; it is a real
+     * reading from a successful ioctl, not missing telemetry. */
     *rpm = raw_tach ? (int)(2156220U / raw_tach) : 0;
     return 0;
 }
 
-static int faninfo_to_temperature(int faninfo)
+static int faninfo_to_temperature(int32_t faninfo)
 {
-    return (faninfo >> 8) & 0xff;
+    /* Shift as unsigned: right-shifting a negative signed value is
+     * implementation-defined in C. */
+    return (int)(((uint32_t)faninfo >> 8) & 0xffU);
 }
 
 int acer_cpu_fan_rpm(AcerContext *ctx, int *rpm)

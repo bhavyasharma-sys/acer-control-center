@@ -94,7 +94,26 @@ impl AcerControlDBus {
     }
 
     async fn set_power_caps(&self, cpu_watts: u32, gpu_watts: u32) -> (String, String) {
-        self.service.set_power_caps(cpu_watts, gpu_watts)
+        // Power caps run `nvidia-smi` subprocesses and RAPL sysfs writes that
+        // can take seconds, especially under GPU load. Run them on a blocking
+        // thread so the daemon's async runtime — and every other D-Bus call,
+        // including telemetry reads the GUI polls — stays responsive.
+        let service = Arc::clone(&self.service);
+        let fallback = || {
+            (
+                "CPU cap not applied: power-control task failed".to_owned(),
+                "GPU cap not applied: power-control task failed".to_owned(),
+            )
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle
+                .spawn_blocking(move || service.set_power_caps(cpu_watts, gpu_watts))
+                .await
+                .unwrap_or_else(|_| fallback()),
+            // No Tokio context (should not happen under #[tokio::main]):
+            // degrade to a direct call rather than panicking in a D-Bus handler.
+            Err(_) => service.set_power_caps(cpu_watts, gpu_watts),
+        }
     }
 
     async fn get_fan_max_selected(&self) -> bool {

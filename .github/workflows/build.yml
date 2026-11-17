@@ -48,6 +48,17 @@ jobs:
           cargo check --locked --manifest-path daemon/Cargo.toml
           ACERCONTROL_LIB_DIR="$PWD/target/ci-lib" cargo check --locked --manifest-path gui/Cargo.toml
 
+      - name: Run unit tests
+        # Telemetry parsers, NVIDIA command construction and rejection
+        # detection, power-limit readback mismatches, profile defaults and
+        # config parsing, and UI state logic. Hardware and command execution
+        # are mocked, so these run without an Acer laptop or NVIDIA GPU.
+        env:
+          ACERCONTROL_LIB_DIR: ${{ github.workspace }}/target/ci-lib
+        run: |
+          cargo test --locked --manifest-path daemon/Cargo.toml
+          cargo test --locked --manifest-path gui/Cargo.toml
+
   packages:
     needs: build
     runs-on: ubuntu-24.04
