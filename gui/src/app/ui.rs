@@ -4,37 +4,143 @@ impl ControlCenter {
     pub(super) fn page_content(&mut self, ui: &mut egui::Ui) {
         match self.page {
             Page::Dashboard => {
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(31, 44, 49))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(52, 76, 77)))
-                    .corner_radius(12.0)
-                    .inner_margin(egui::Margin::symmetric(18, 15))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new("ACER ASPIRE 7 · A715-79G").small().strong().color(ACCENT));
-                                ui.heading(RichText::new("System overview").size(23.0));
-                                ui.label(RichText::new("Core 5 210H  ·  GeForce RTX 3050 6 GB").color(MUTED));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new("ACER CONTROL CENTER").small().strong().color(MUTED));
-                            });
-                        });
-                    });
-                ui.add_space(18.0);
+                let telemetry = self.telemetry.clone();
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("THERMAL & FAN TELEMETRY").small().strong().color(MUTED));
-                    ui.label(RichText::new("·  refreshed about every second").small().color(MUTED));
-                });
-                ui.add_space(10.0);
-                Self::telemetry_gauges(ui, &self.telemetry);
-                ui.add_space(18.0);
-                ui.label(RichText::new("Quick controls").strong());
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    for (page, title) in [(Page::Cooling, "Cooling settings"), (Page::Keyboard, "Keyboard lighting"), (Page::Performance, "Power profiles")] {
-                        if ui.button(title).clicked() { self.page = page; }
+                    ui.label(RichText::new("POWER MODE").small().strong().color(MUTED));
+                    ui.add_space(10.0);
+                    for (index, name) in [(0, "Performance"), (1, "Balanced"), (2, "Battery Saver")] {
+                        let selected = self.power_profile_index == index;
+                        let button = egui::Button::new(
+                            RichText::new(name).color(if selected { ACCENT } else { TEXT }),
+                        )
+                        .selected(selected)
+                        .fill(if selected { Color32::from_rgb(22, 56, 61) } else { SURFACE })
+                        .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }));
+                        if ui.add(button).clicked() {
+                            self.power_profile_index = index;
+                            if let Err(error) = super::power_profiles::save(self.power_profiles, index) {
+                                self.set_notice(false, format!("Could not save power profile: {error}"));
+                            }
+                        }
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new("Targets are selected here; apply them in Power Profiles").small().color(MUTED));
+                    });
+                });
+                ui.add_space(12.0);
+                ui.columns(3, |columns| {
+                    egui::Frame::new().fill(Color32::from_rgb(12, 16, 21))
+                        .stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
+                        .show(&mut columns[0], |ui| {
+                            ui.label(RichText::new("SYSTEM").small().strong().color(ACCENT));
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("ACER ASPIRE 7 · A715-79G").strong());
+                            ui.label(RichText::new("Core 5 210H · RTX 3050 6 GB").small().color(MUTED));
+                            ui.add_space(14.0);
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label("Average CPU clock");
+                                    ui.heading(telemetry.cpu_clock_mhz.map(|v| format!("{v} MHz")).unwrap_or_else(|| "Unavailable".into()));
+                                    ui.label(telemetry.cpu_temperature.map(|v| format!("{v} °C temperature")).unwrap_or_else(|| "Temperature unavailable".into()));
+                                });
+                            });
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label("GPU clock");
+                                    ui.heading(telemetry.gpu_clock_mhz.map(|v| format!("{v} MHz")).unwrap_or_else(|| "Unavailable".into()));
+                                    ui.label(telemetry.gpu_temperature.map(|v| format!("{v} °C temperature")).unwrap_or_else(|| "Temperature unavailable".into()));
+                                });
+                            });
+                            ui.add_space(12.0);
+                            Self::progress_meter(ui, "CPU usage", telemetry.cpu_usage_percent,
+                                telemetry.cpu_usage_percent.map(|v| format!("{v} %")).unwrap_or_else(|| "Unavailable".into()));
+                            ui.add_space(7.0);
+                            Self::progress_meter(ui, "GPU usage", telemetry.gpu_usage_percent,
+                                telemetry.gpu_usage_percent.map(|v| format!("{v} %")).unwrap_or_else(|| "Unavailable".into()));
+                        });
+                    Self::dashboard_dial(&mut columns[1], &telemetry);
+                    egui::Frame::new().fill(Color32::from_rgb(12, 16, 21))
+                        .stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
+                        .show(&mut columns[2], |ui| {
+                            ui.label(RichText::new("FAN SPEED CONTROL").small().strong().color(ACCENT));
+                            ui.add_space(6.0);
+                            let mode = components::segmented_choice(
+                                ui,
+                                self.fan_mode,
+                                &[(components::FanMode::Auto, "Automatic"), (components::FanMode::Max, "Maximum")],
+                            );
+                            if let Some(mode) = mode {
+                                let result = match mode {
+                                    components::FanMode::Auto => self.action("Automatic fan mode", || libacercontrol::dbus::AcerControlDBus::new()?.set_fan_auto()),
+                                    components::FanMode::Max => self.action("Maximum fan mode", || libacercontrol::dbus::AcerControlDBus::new()?.set_fan_max()),
+                                };
+                                if result {
+                                    self.fan_mode = mode;
+                                    self.fan_mode_confirmed = true;
+                                }
+                            }
+                            if !self.fan_mode_confirmed {
+                                ui.label(RichText::new("Firmware does not report the current mode").small().weak());
+                            }
+                            ui.add_space(16.0);
+                            ui.label(RichText::new("CPU FAN").small().color(MUTED));
+                            ui.heading(telemetry.cpu_fan_rpm.map(|v| format!("{v} RPM")).unwrap_or_else(|| "Unavailable".into()));
+                            ui.add_space(9.0);
+                            ui.label(RichText::new("GPU FAN").small().color(MUTED));
+                            ui.heading(telemetry.gpu_fan_rpm.map(|v| format!("{v} RPM")).unwrap_or_else(|| "Unavailable".into()));
+                            ui.add_space(12.0);
+                            if ui.button("Cooling details →").clicked() { self.page = Page::Cooling; }
+                        });
+                });
+                ui.add_space(12.0);
+                ui.columns(3, |columns| {
+                    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
+                        .show(&mut columns[0], |ui| {
+                            ui.label(RichText::new("MEMORY & STORAGE").small().strong().color(MUTED));
+                            ui.add_space(6.0);
+                            let percent = |usage: (u64, u64)| if usage.1 == 0 { 0 } else { ((usage.0 * 100 / usage.1).min(100)) as u8 };
+                            let mem = telemetry.system_memory_mib;
+                            let mem_detail = mem.map(|(used, total)| format!("{:.1} / {:.1} GiB", used as f32 / 1024.0, total as f32 / 1024.0)).unwrap_or_else(|| "Unavailable".into());
+                            Self::progress_meter(ui, "System memory", mem.map(percent), mem_detail);
+                            ui.add_space(9.0);
+                            let disk = telemetry.root_storage_mib;
+                            let disk_detail = disk.map(|(used, total)| format!("{:.1} / {:.1} GiB (root)", used as f32 / 1024.0, total as f32 / 1024.0)).unwrap_or_else(|| "Unavailable".into());
+                            Self::progress_meter(ui, "Storage", disk.map(percent), disk_detail);
+                            ui.add_space(9.0);
+                            let vram = telemetry.gpu_memory_mib;
+                            let vram_detail = vram.map(|(used, total)| format!("{} / {} MiB", used, total)).unwrap_or_else(|| "Unavailable".into());
+                            Self::progress_meter(ui, "GPU memory", vram.map(percent), vram_detail);
+                        });
+                    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
+                        .show(&mut columns[1], |ui| {
+                            ui.label(RichText::new("PREFERENCES").small().strong().color(MUTED));
+                            ui.add_space(8.0);
+                            ui.horizontal_wrapped(|ui| {
+                                for (page, icon, title) in [(Page::Keyboard, "⌨", "Keyboard"), (Page::Cooling, "⌁", "Cooling"), (Page::Settings, "⚙", "Settings")] {
+                                    if ui.add(egui::Button::new(format!("{icon}  {title}")).min_size(egui::vec2(92.0, 52.0))).clicked() { self.page = page; }
+                                }
+                            });
+                            ui.add_space(5.0);
+                            ui.label(RichText::new("Only controls supported by this driver are shown.").small().weak());
+                        });
+                    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0).inner_margin(12)
+                        .show(&mut columns[2], |ui| {
+                            ui.label(RichText::new("SELECTED POWER TARGET").small().strong().color(MUTED));
+                            let [cpu, gpu] = self.power_profiles[self.power_profile_index];
+                            ui.add_space(5.0);
+                            ui.heading(["Performance", "Balanced", "Battery Saver"][self.power_profile_index]);
+                            ui.label(format!("CPU {cpu} W   ·   GPU {gpu} W"));
+                            ui.label(RichText::new("Selection does not apply caps until you press Apply.").small().weak());
+                            ui.add_space(5.0);
+                            if ui.button("Power profile settings →").clicked() { self.page = Page::Performance; }
+                        });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let freshness = telemetry.sampled_at
+                        .map(|time| format!("Live telemetry · updated {} sec ago", time.elapsed().as_secs().min(99)))
+                        .unwrap_or_else(|| "Waiting for telemetry".into());
+                    ui.label(RichText::new(freshness).small().color(MUTED));
                 });
             }
             Page::Cooling => {

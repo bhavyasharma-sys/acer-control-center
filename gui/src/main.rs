@@ -69,8 +69,8 @@ fn main() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(instance::APP_ID)
-            .with_inner_size([1000.0, 720.0])
-            .with_min_inner_size([640.0, 480.0])
+            .with_inner_size([1280.0, 800.0])
+            .with_min_inner_size([800.0, 600.0])
             .with_icon(icon)
             .with_visible(true),
         ..Default::default()

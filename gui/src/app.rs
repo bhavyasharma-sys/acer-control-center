@@ -1,6 +1,8 @@
 
 use eframe::egui;
 use egui::{Color32, RichText, Stroke};
+use std::ffi::CString;
+use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -23,6 +25,10 @@ impl Page {
         Self::Battery => "Battery care and charging options",
         Self::Settings => "Application preferences and system information",
     }}
+    fn icon(self) -> &'static str { match self {
+        Self::Dashboard => "◈", Self::Cooling => "⌁", Self::Keyboard => "⌨",
+        Self::Performance => "◉", Self::Battery => "▱", Self::Settings => "⚙",
+    }}
 }
 
 const APP_BG: Color32 = Color32::from_rgb(17, 20, 24);
@@ -43,7 +49,150 @@ struct TelemetrySnapshot {
     gpu_temperature: Option<i32>,
     cpu_fan_rpm: Option<i32>,
     gpu_fan_rpm: Option<i32>,
+    cpu_clock_mhz: Option<u32>,
+    cpu_clock_max_mhz: Option<u32>,
+    cpu_usage_percent: Option<u8>,
+    gpu_clock_mhz: Option<u32>,
+    gpu_usage_percent: Option<u8>,
+    gpu_memory_mib: Option<(u64, u64)>,
+    system_memory_mib: Option<(u64, u64)>,
+    root_storage_mib: Option<(u64, u64)>,
     sampled_at: Option<Instant>,
+}
+
+fn read_cpu_clock() -> (Option<u32>, Option<u32>) {
+    let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu") else {
+        return (None, None);
+    };
+    let mut current_total = 0_u64;
+    let mut current_count = 0_u64;
+    let mut maximum = 0_u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.strip_prefix("cpu").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+        }) {
+            continue;
+        }
+        let cpufreq = entry.path().join("cpufreq");
+        let current = ["scaling_cur_freq", "cpuinfo_cur_freq"]
+            .iter()
+            .copied()
+            .find_map(|file| std::fs::read_to_string(cpufreq.join(file)).ok()?.trim().parse::<u64>().ok());
+        let max = ["scaling_max_freq", "cpuinfo_max_freq"]
+            .iter()
+            .copied()
+            .find_map(|file| std::fs::read_to_string(cpufreq.join(file)).ok()?.trim().parse::<u64>().ok());
+        if let Some(current) = current {
+            current_total += current;
+            current_count += 1;
+        }
+        if let Some(max) = max {
+            maximum = maximum.max(max);
+        }
+    }
+    let current_mhz = (current_count > 0).then(|| (current_total / current_count / 1000) as u32);
+    let maximum_mhz = (maximum > 0).then(|| (maximum / 1000) as u32);
+    (current_mhz, maximum_mhz)
+}
+
+fn read_cpu_usage(previous: &mut Option<(u64, u64)>) -> Option<u8> {
+    let contents = std::fs::read_to_string("/proc/stat").ok()?;
+    let line = contents.lines().next()?;
+    let mut fields = line.split_whitespace();
+    if fields.next()? != "cpu" {
+        return None;
+    }
+    let values: Vec<u64> = fields.take(8).map(str::parse).collect::<Result<_, _>>().ok()?;
+    if values.len() < 5 {
+        return None;
+    }
+    let total = values.iter().copied().sum::<u64>();
+    let idle = values[3].saturating_add(values[4]);
+    let current = (total, idle);
+    let last = previous.replace(current)?;
+    let total_delta = total.saturating_sub(last.0);
+    if total_delta == 0 {
+        return None;
+    }
+    let busy_delta = total_delta.saturating_sub(idle.saturating_sub(last.1));
+    Some(((busy_delta.saturating_mul(100) / total_delta).min(100)) as u8)
+}
+
+fn read_system_memory() -> Option<(u64, u64)> {
+    let contents = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let mut total_kib = None;
+    let mut available_kib = None;
+    for line in contents.lines() {
+        let (name, value) = line.split_once(':')?;
+        let kib = value.split_whitespace().next()?.parse::<u64>().ok()?;
+        match name {
+            "MemTotal" => total_kib = Some(kib),
+            "MemAvailable" => available_kib = Some(kib),
+            _ => {}
+        }
+    }
+    let total = total_kib? / 1024;
+    let available = available_kib? / 1024;
+    Some((total.saturating_sub(available), total))
+}
+
+fn read_root_storage() -> Option<(u64, u64)> {
+    let path = CString::new("/").ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let stats = unsafe { stats.assume_init() };
+    let block_size = if stats.f_frsize > 0 {
+        stats.f_frsize as u64
+    } else {
+        stats.f_bsize as u64
+    };
+    let total_bytes = (stats.f_blocks as u64).saturating_mul(block_size);
+    let available_bytes = (stats.f_bavail as u64)
+        .saturating_mul(block_size)
+        .min(total_bytes);
+    let mib = 1024_u64.pow(2);
+    Some((total_bytes.saturating_sub(available_bytes) / mib, total_bytes / mib))
+}
+
+fn parse_nvidia_metric(value: &str) -> Option<u64> {
+    let value = value.trim().trim_matches(|character| character == '[' || character == ']');
+    if value.eq_ignore_ascii_case("N/A") || value.is_empty() {
+        return None;
+    }
+    value.split_whitespace().next()?.parse().ok()
+}
+
+fn read_nvidia_telemetry() -> (Option<u32>, Option<u8>, Option<(u64, u64)>) {
+    let output = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=clocks.current.graphics,utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            "-i",
+            "0",
+        ])
+        .output()
+        .ok();
+    let Some(output) = output.filter(|output| output.status.success()) else {
+        return (None, None, None);
+    };
+    let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next().map(str::to_owned) else {
+        return (None, None, None);
+    };
+    let fields: Vec<_> = line.split(',').map(str::trim).collect();
+    if fields.len() != 4 {
+        return (None, None, None);
+    }
+    let clock = parse_nvidia_metric(fields[0]).map(|value| value as u32);
+    let usage = parse_nvidia_metric(fields[1]).map(|value| value.min(100) as u8);
+    let memory = match (parse_nvidia_metric(fields[2]), parse_nvidia_metric(fields[3])) {
+        (Some(used), Some(total)) => Some((used, total)),
+        _ => None,
+    };
+    (clock, usage, memory)
 }
 
 pub(crate) struct ControlCenter {
@@ -124,18 +273,31 @@ impl ControlCenter {
         let (update_sender, update_receiver) = mpsc::channel();
         let (power_cap_sender, power_cap_receiver) = mpsc::channel();
         let (telemetry_sender, telemetry_receiver) = mpsc::channel();
-        std::thread::spawn(move || loop {
-            let snapshot = TelemetrySnapshot {
-                cpu_temperature: libacercontrol::telemetry::cpu_temperature().ok(),
-                gpu_temperature: libacercontrol::telemetry::gpu_temperature().ok(),
-                cpu_fan_rpm: libacercontrol::telemetry::cpu_fan_rpm().ok(),
-                gpu_fan_rpm: libacercontrol::telemetry::gpu_fan_rpm().ok(),
-                sampled_at: Some(Instant::now()),
-            };
-            if telemetry_sender.send(snapshot).is_err() {
-                break;
+        std::thread::spawn(move || {
+            let mut previous_cpu = None;
+            loop {
+                let (cpu_clock_mhz, cpu_clock_max_mhz) = read_cpu_clock();
+                let (gpu_clock_mhz, gpu_usage_percent, gpu_memory_mib) = read_nvidia_telemetry();
+                let snapshot = TelemetrySnapshot {
+                    cpu_temperature: libacercontrol::telemetry::cpu_temperature().ok(),
+                    gpu_temperature: libacercontrol::telemetry::gpu_temperature().ok(),
+                    cpu_fan_rpm: libacercontrol::telemetry::cpu_fan_rpm().ok(),
+                    gpu_fan_rpm: libacercontrol::telemetry::gpu_fan_rpm().ok(),
+                    cpu_clock_mhz,
+                    cpu_clock_max_mhz,
+                    cpu_usage_percent: read_cpu_usage(&mut previous_cpu),
+                    gpu_clock_mhz,
+                    gpu_usage_percent,
+                    gpu_memory_mib,
+                    system_memory_mib: read_system_memory(),
+                    root_storage_mib: read_root_storage(),
+                    sampled_at: Some(Instant::now()),
+                };
+                if telemetry_sender.send(snapshot).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(1));
             }
-            std::thread::sleep(Duration::from_secs(1));
         });
         Self {
             page: Page::Dashboard,
@@ -250,6 +412,133 @@ impl ControlCenter {
                     .color(MUTED),
             );
         });
+    }
+
+    fn dashboard_dial(ui: &mut egui::Ui, telemetry: &TelemetrySnapshot) {
+        egui::Frame::new()
+            .fill(Color32::from_rgb(8, 13, 19))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(40, 65, 75)))
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.label(RichText::new("CPU CLOCK SPEED").small().strong().color(MUTED));
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 254.0),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+                let center = egui::pos2(rect.center().x, rect.top() + 151.0);
+                let radius = (rect.width() * 0.37).clamp(74.0, 116.0);
+                let points = |fraction: f32| {
+                    let angle = std::f32::consts::PI * (1.0 - fraction);
+                    egui::pos2(
+                        center.x + radius * angle.cos(),
+                        center.y - radius * angle.sin(),
+                    )
+                };
+                let arc = |end: f32| {
+                    (0..=28)
+                        .map(|step| points(end * step as f32 / 28.0))
+                        .collect::<Vec<_>>()
+                };
+                painter.add(egui::Shape::line(
+                    arc(1.0),
+                    Stroke::new(8.0, Color32::from_rgb(45, 57, 67)),
+                ));
+                let clock_fraction = match (telemetry.cpu_clock_mhz, telemetry.cpu_clock_max_mhz) {
+                    (Some(current), Some(maximum)) if maximum > 0 => {
+                        Some((current as f32 / maximum as f32).clamp(0.0, 1.0))
+                    }
+                    _ => None,
+                };
+                if let Some(fraction) = clock_fraction {
+                    painter.add(egui::Shape::line(
+                        arc(fraction),
+                        Stroke::new(8.0, ACCENT),
+                    ));
+                    let needle = points(fraction);
+                    painter.line_segment(
+                        [center, egui::pos2(
+                            center.x + (needle.x - center.x) * 0.84,
+                            center.y + (needle.y - center.y) * 0.84,
+                        )],
+                        Stroke::new(2.0, Color32::from_rgb(180, 236, 228)),
+                    );
+                }
+                painter.circle_filled(center, 7.0, Color32::from_rgb(180, 236, 228));
+                let clock_text = telemetry
+                    .cpu_clock_mhz
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".to_owned());
+                painter.text(
+                    egui::pos2(center.x, center.y - 24.0),
+                    egui::Align2::CENTER_CENTER,
+                    "CPU",
+                    egui::FontId::proportional(14.0),
+                    MUTED,
+                );
+                painter.text(
+                    egui::pos2(center.x, center.y + 7.0),
+                    egui::Align2::CENTER_CENTER,
+                    clock_text,
+                    egui::FontId::proportional(27.0),
+                    TEXT,
+                );
+                painter.text(
+                    egui::pos2(center.x, center.y + 31.0),
+                    egui::Align2::CENTER_CENTER,
+                    "MHz average",
+                    egui::FontId::proportional(10.0),
+                    MUTED,
+                );
+                let max_label = telemetry.cpu_clock_max_mhz
+                    .map(|mhz| format!("{:.1} GHz", mhz as f32 / 1000.0))
+                    .unwrap_or_else(|| "max".to_owned());
+                painter.text(
+                    egui::pos2(center.x - radius - 2.0, center.y + 12.0),
+                    egui::Align2::LEFT_CENTER,
+                    "0",
+                    egui::FontId::proportional(10.0),
+                    MUTED,
+                );
+                painter.text(
+                    egui::pos2(center.x + radius + 2.0, center.y + 12.0),
+                    egui::Align2::RIGHT_CENTER,
+                    max_label,
+                    egui::FontId::proportional(10.0),
+                    MUTED,
+                );
+                let temperature = telemetry.cpu_temperature
+                    .map(|value| format!("CPU temperature  {value} °C"))
+                    .unwrap_or_else(|| "CPU temperature  Unavailable".to_owned());
+                painter.text(
+                    egui::pos2(rect.center().x, rect.bottom() - 8.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    temperature,
+                    egui::FontId::proportional(12.0),
+                    telemetry.cpu_temperature.map(|value| {
+                        if value >= 85 { HOT } else if value >= 70 { WARM } else { COOL }
+                    }).unwrap_or(MUTED),
+                );
+            });
+    }
+
+    fn progress_meter(ui: &mut egui::Ui, label: &str, value: Option<u8>, detail: String) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(label).small().color(MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(detail).small().strong().color(TEXT));
+            });
+        });
+        if let Some(value) = value {
+            ui.add(
+                egui::ProgressBar::new(value as f32 / 100.0)
+                    .fill(ACCENT)
+                    .desired_height(8.0),
+            );
+        } else {
+            ui.label(RichText::new("Telemetry unavailable").weak().small());
+        }
     }
 
     pub(crate) fn configure_theme(ctx: &egui::Context) {
@@ -383,48 +672,44 @@ impl eframe::App for ControlCenter {
                 }
             }
         }
-        egui::SidePanel::left("navigation")
-            .resizable(false)
-            .default_width(230.0)
-            .frame(egui::Frame::new().fill(SIDEBAR_BG).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(egui::Margin::same(14)))
+        egui::TopBottomPanel::top("acer-control-toolbar")
+            .frame(egui::Frame::new().fill(SIDEBAR_BG).stroke(Stroke::new(1.0, BORDER)).inner_margin(egui::Margin::symmetric(18, 8)))
             .show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add_space(8.0);
-                ui.label(RichText::new("ACER").size(11.0).strong().color(ACCENT));
-                ui.add_space(3.0);
-                ui.label(RichText::new("Control Center").size(18.0).strong().color(TEXT));
-                ui.label(RichText::new("DEVICE MANAGEMENT").size(9.0).color(MUTED));
-                ui.add_space(22.0);
-                for page in Page::ALL {
-                    if components::sidebar_button(ui, page.title(), self.page == page) {
-                        self.page = page;
-                    }
-                    ui.add_space(2.0);
-                }
-                ui.add_space(16.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).small().color(MUTED));
-            });
-        });
-        egui::TopBottomPanel::top("page-header")
-            .frame(egui::Frame::new().fill(SIDEBAR_BG).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(egui::Margin::symmetric(26, 16)))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.heading(RichText::new(self.page.title()).size(22.0).color(TEXT));
+                ui.columns(3, |columns| {
+                    columns[0].horizontal(|ui| {
+                        ui.label(RichText::new("◢ ACER").size(16.0).strong().color(ACCENT));
+                        ui.label(RichText::new("DEVICE CONTROL").small().color(MUTED));
+                    });
+                    columns[1].vertical_centered(|ui| {
+                        ui.heading(RichText::new("Control Center").size(20.0).color(TEXT));
                         ui.label(RichText::new(self.page.description()).small().color(MUTED));
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("LINUX DEVICE UTILITY").small().color(MUTED));
+                    columns[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(format!("{}  ·  v{}", self.page.title(), env!("CARGO_PKG_VERSION"))).small().color(MUTED));
                     });
+                });
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for page in Page::ALL {
+                        let selected = self.page == page;
+                        let button = egui::Button::new(
+                            RichText::new(format!("{}  {}", page.icon(), page.title()))
+                                .color(if selected { Color32::from_rgb(178, 237, 230) } else { TEXT }),
+                        )
+                        .selected(selected)
+                        .fill(if selected { Color32::from_rgb(21, 55, 61) } else { Color32::TRANSPARENT })
+                        .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
+                        .min_size(egui::vec2(94.0, 36.0));
+                        if ui.add(button).clicked() {
+                            self.page = page;
+                        }
+                    }
                 });
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(APP_BG).inner_margin(egui::Margin::same(24)))
+            .frame(egui::Frame::new().fill(APP_BG).inner_margin(egui::Margin::same(16)))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.set_max_width(980.0);
                     self.page_content(ui);
                     if self.notice.as_ref().is_some_and(|(_, _, created)| created.elapsed() >= Duration::from_secs(3)) {
                         self.notice = None;
