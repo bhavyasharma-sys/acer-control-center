@@ -33,6 +33,18 @@ const BORDER: Color32 = Color32::from_rgb(46, 53, 61);
 const TEXT: Color32 = Color32::from_rgb(229, 233, 237);
 const MUTED: Color32 = Color32::from_rgb(151, 160, 169);
 const ACCENT: Color32 = Color32::from_rgb(95, 174, 166);
+const COOL: Color32 = Color32::from_rgb(89, 190, 170);
+const WARM: Color32 = Color32::from_rgb(241, 177, 82);
+const HOT: Color32 = Color32::from_rgb(226, 105, 92);
+
+#[derive(Clone, Default)]
+struct TelemetrySnapshot {
+    cpu_temperature: Option<i32>,
+    gpu_temperature: Option<i32>,
+    cpu_fan_rpm: Option<i32>,
+    gpu_fan_rpm: Option<i32>,
+    sampled_at: Option<Instant>,
+}
 
 pub(crate) struct ControlCenter {
     page: Page,
@@ -55,6 +67,8 @@ pub(crate) struct ControlCenter {
     power_cap_sender: mpsc::Sender<Result<(String, String), String>>,
     power_cap_receiver: mpsc::Receiver<Result<(String, String), String>>,
     power_cap_applying: bool,
+    telemetry_receiver: mpsc::Receiver<TelemetrySnapshot>,
+    telemetry: TelemetrySnapshot,
     update_checking: bool,
     update_status: String,
     latest_release: Option<about::LatestRelease>,
@@ -109,6 +123,20 @@ impl ControlCenter {
         let tray_ready = background_ready;
         let (update_sender, update_receiver) = mpsc::channel();
         let (power_cap_sender, power_cap_receiver) = mpsc::channel();
+        let (telemetry_sender, telemetry_receiver) = mpsc::channel();
+        std::thread::spawn(move || loop {
+            let snapshot = TelemetrySnapshot {
+                cpu_temperature: libacercontrol::telemetry::cpu_temperature().ok(),
+                gpu_temperature: libacercontrol::telemetry::gpu_temperature().ok(),
+                cpu_fan_rpm: libacercontrol::telemetry::cpu_fan_rpm().ok(),
+                gpu_fan_rpm: libacercontrol::telemetry::gpu_fan_rpm().ok(),
+                sampled_at: Some(Instant::now()),
+            };
+            if telemetry_sender.send(snapshot).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        });
         Self {
             page: Page::Dashboard,
             brightness,
@@ -134,6 +162,8 @@ impl ControlCenter {
             power_cap_sender,
             power_cap_receiver,
             power_cap_applying: false,
+            telemetry_receiver,
+            telemetry: TelemetrySnapshot::default(),
             update_checking: false,
             update_status: "Updates are checked only when you ask.".to_owned(),
             latest_release: None,
@@ -147,51 +177,68 @@ impl ControlCenter {
         succeeded
     }
 
-    fn metric(ui: &mut egui::Ui, label: &str, value: Result<i32, String>, unit: &str) {
-        let text = value
-            .map(|v| format!("{v}{unit}"))
-            .unwrap_or_else(|_| "Unavailable".into());
-
+    fn gauge_card(ui: &mut egui::Ui, label: &str, value: Option<i32>, max_value: f32, unit: &str, suffix: &str) {
         egui::Frame::new()
             .fill(SURFACE)
-            .stroke(Stroke::new(1.0_f32, BORDER))
-            .corner_radius(8.0)
-            .inner_margin(egui::Margin::symmetric(12, 12))
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-
-                ui.label(
-                    RichText::new(label.to_uppercase())
-                        .small()
-                        .color(MUTED),
-                );
-
-                ui.heading(RichText::new(text).size(21.0).color(TEXT));
+                ui.set_min_height(204.0);
+                ui.label(RichText::new(label.to_uppercase()).small().strong().color(MUTED));
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 169.0), egui::Sense::hover());
+                let painter = ui.painter_at(rect);
+                let center = egui::pos2(rect.center().x, rect.top() + 100.0);
+                let radius = (rect.width() * 0.31).clamp(48.0, 77.0);
+                let fraction = value.map(|v| (v as f32 / max_value).clamp(0.0, 1.0));
+                let segments = 48;
+                for i in 0..segments {
+                    let start = std::f32::consts::PI - std::f32::consts::PI * i as f32 / segments as f32;
+                    let end = std::f32::consts::PI - std::f32::consts::PI * (i + 1) as f32 / segments as f32;
+                    let active = fraction.is_some_and(|amount| (i as f32 + 0.5) / segments as f32 <= amount);
+                    let position = i as f32 / segments as f32;
+                    let band_color = if position < 0.68 { COOL } else if position < 0.86 { WARM } else { HOT };
+                    let color = if active { band_color } else { Color32::from_rgb(54, 62, 69) };
+                    painter.line_segment(
+                        [egui::pos2(center.x + radius * start.cos(), center.y - radius * start.sin()),
+                         egui::pos2(center.x + radius * end.cos(), center.y - radius * end.sin())],
+                        Stroke::new(9.0, color),
+                    );
+                }
+                let display = value.map(|v| format!("{v}{suffix}")).unwrap_or_else(|| "—".to_owned());
+                painter.text(egui::pos2(center.x, center.y + 13.0), egui::Align2::CENTER_CENTER, display,
+                    egui::FontId::proportional(27.0), TEXT);
+                painter.text(egui::pos2(center.x, center.y + 37.0), egui::Align2::CENTER_CENTER,
+                    if value.is_some() { unit } else { "SENSOR UNAVAILABLE" },
+                    egui::FontId::proportional(10.0), MUTED);
+                painter.text(egui::pos2(center.x - radius - 2.0, center.y + 12.0), egui::Align2::LEFT_CENTER, "0",
+                    egui::FontId::proportional(10.0), MUTED);
+                painter.text(egui::pos2(center.x + radius + 2.0, center.y + 12.0), egui::Align2::RIGHT_CENTER,
+                    max_value as i32, egui::FontId::proportional(10.0), MUTED);
             });
     }
 
-    fn metric_grid(ui: &mut egui::Ui, metrics: [(&str, Result<i32, String>, &str); 4]) {
-        let available_width = ui.available_width();
-        let card_width = (available_width / 2.0).max(1.0);
-
-        for row in 0..2 {
-            ui.vertical(|ui| {
-
-                for col in 0..2 {
-                    let index = row * 2 + col;
-                    let (label, value, unit) = &metrics[index];
-
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(card_width, 100.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |card_ui| {
-                            card_ui.set_width(card_width);
-                            Self::metric(card_ui, label, value.clone(), unit);
-                        },
-                    );
-                }
+    fn telemetry_gauges(ui: &mut egui::Ui, telemetry: &TelemetrySnapshot) {
+        ui.columns(2, |columns| {
+            Self::gauge_card(&mut columns[0], "CPU temperature", telemetry.cpu_temperature, 100.0, "THERMAL · °C", "°C");
+            Self::gauge_card(&mut columns[1], "GPU temperature", telemetry.gpu_temperature, 100.0, "THERMAL · °C", "°C");
+        });
+        ui.add_space(10.0);
+        ui.columns(2, |columns| {
+            Self::gauge_card(&mut columns[0], "CPU fan speed", telemetry.cpu_fan_rpm, 6000.0, "FAN SPEED · RPM", " RPM");
+            Self::gauge_card(&mut columns[1], "GPU fan speed", telemetry.gpu_fan_rpm, 6000.0, "FAN SPEED · RPM", " RPM");
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let sampled = telemetry.sampled_at.map(|time| {
+                format!("Updated {} sec ago", time.elapsed().as_secs().min(99))
             });
-        }
+            ui.label(
+                RichText::new(sampled.unwrap_or_else(|| "Waiting for sensor data".to_owned()))
+                    .small()
+                    .color(MUTED),
+            );
+        });
     }
 
     pub(crate) fn configure_theme(ctx: &egui::Context) {
@@ -227,7 +274,9 @@ impl ControlCenter {
     fn keyboard_preview(ui: &mut egui::Ui, color: Color32, brightness: u8) {
         ui.add_space(16.0);
         ui.label(RichText::new("LIVE KEYBOARD PREVIEW").strong());
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(680.0, 156.0), egui::Sense::hover());
+        let preview_width = ui.available_width().min(680.0);
+        let scale = preview_width / 680.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(preview_width, 156.0 * scale), egui::Sense::hover());
         let painter = ui.painter_at(rect);
         let glow = |channel: u8| ((channel as u16 * brightness as u16) / 255) as u8;
         let key_color = Color32::from_rgb(glow(color.r()), glow(color.g()), glow(color.b()));
@@ -238,19 +287,19 @@ impl ControlCenter {
             &["Caps", "A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'", "Enter"],
         ];
         for (row_index, row) in rows.iter().enumerate() {
-            let gap = 5.0;
-            let key_width = ((rect.width() - gap * (row.len() as f32 - 1.0)) / row.len() as f32).min(48.0);
+            let gap = 5.0 * scale;
+            let key_width = ((rect.width() - gap * (row.len() as f32 - 1.0)) / row.len() as f32).min(48.0 * scale);
             let row_width = row.len() as f32 * key_width + gap * (row.len() as f32 - 1.0);
             let start_x = rect.center().x - row_width / 2.0;
-            let y = rect.top() + row_index as f32 * 34.0;
+            let y = rect.top() + row_index as f32 * 34.0 * scale;
             for (column, label) in row.iter().enumerate() {
                 let key = egui::Rect::from_min_size(
                     egui::pos2(start_x + column as f32 * (key_width + gap), y),
-                    egui::vec2(key_width, 27.0),
+                    egui::vec2(key_width, 27.0 * scale),
                 );
-                painter.rect_filled(key, 5.0, Color32::from_gray(32));
-                painter.rect_stroke(key, 5.0, egui::Stroke::new(1.0_f32, key_color), egui::StrokeKind::Inside);
-                painter.text(key.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0), key_color);
+                painter.rect_filled(key, 5.0 * scale, Color32::from_gray(32));
+                painter.rect_stroke(key, 5.0 * scale, egui::Stroke::new(scale, key_color), egui::StrokeKind::Inside);
+                painter.text(key.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0 * scale), key_color);
             }
         }
     }
@@ -273,6 +322,9 @@ impl eframe::App for ControlCenter {
         if instance::take_activation_request() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        while let Ok(snapshot) = self.telemetry_receiver.try_recv() {
+            self.telemetry = snapshot;
         }
         if instance::take_window_quit_request() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

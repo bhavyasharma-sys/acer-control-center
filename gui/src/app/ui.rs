@@ -4,16 +4,38 @@ impl ControlCenter {
     pub(super) fn page_content(&mut self, ui: &mut egui::Ui) {
         match self.page {
             Page::Dashboard => {
-                ui.label(RichText::new("LIVE TELEMETRY").small().strong().color(MUTED));
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(31, 44, 49))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(52, 76, 77)))
+                    .corner_radius(12.0)
+                    .inner_margin(egui::Margin::symmetric(18, 15))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("ACER ASPIRE 7 · A715-79G").small().strong().color(ACCENT));
+                                ui.heading(RichText::new("System overview").size(23.0));
+                                ui.label(RichText::new("Core 5 210H  ·  GeForce RTX 3050 6 GB").color(MUTED));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(RichText::new("ACER CONTROL CENTER").small().strong().color(MUTED));
+                            });
+                        });
+                    });
+                ui.add_space(18.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("THERMAL & FAN TELEMETRY").small().strong().color(MUTED));
+                    ui.label(RichText::new("·  refreshed about every second").small().color(MUTED));
+                });
                 ui.add_space(10.0);
-                Self::metric_grid(ui, [
-                    ("CPU temperature", libacercontrol::telemetry::cpu_temperature(), " °C"),
-                    ("GPU temperature", libacercontrol::telemetry::gpu_temperature(), " °C"),
-                    ("CPU fan", libacercontrol::telemetry::cpu_fan_rpm(), " RPM"),
-                    ("GPU fan", libacercontrol::telemetry::gpu_fan_rpm(), " RPM"),
-                ]);
-                ui.add_space(16.0);
-                ui.label(RichText::new("Choose a section from the navigation to manage cooling, lighting, and device settings.").color(MUTED));
+                Self::telemetry_gauges(ui, &self.telemetry);
+                ui.add_space(18.0);
+                ui.label(RichText::new("Quick controls").strong());
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (page, title) in [(Page::Cooling, "Cooling settings"), (Page::Keyboard, "Keyboard lighting"), (Page::Performance, "Power profiles")] {
+                        if ui.button(title).clicked() { self.page = page; }
+                    }
+                });
             }
             Page::Cooling => {
                 ui.label(RichText::new("FAN MODE").small().strong().color(MUTED));
@@ -41,12 +63,9 @@ impl ControlCenter {
                     ui.label("Auto is assumed at startup; this firmware interface does not report the current mode.");
                 }
                 ui.add_space(20.0);
-                Self::metric_grid(ui, [
-                    ("CPU fan", libacercontrol::telemetry::cpu_fan_rpm(), " RPM"),
-                    ("GPU fan", libacercontrol::telemetry::gpu_fan_rpm(), " RPM"),
-                    ("CPU temperature", libacercontrol::telemetry::cpu_temperature(), " °C"),
-                    ("GPU temperature", libacercontrol::telemetry::gpu_temperature(), " °C"),
-                ]);
+                ui.label(RichText::new("LIVE COOLING TELEMETRY").small().strong().color(MUTED));
+                ui.add_space(10.0);
+                Self::telemetry_gauges(ui, &self.telemetry);
             }
             Page::Keyboard => {
                 ui.label(RichText::new("BACKLIGHT").small().strong().color(MUTED));
@@ -158,6 +177,20 @@ impl ControlCenter {
                     .unwrap_or_else(|| if self.idle_timeout_seconds > 0 { "Inactivity dimming runs in the background service".to_owned() } else { "Idle dimming is off".to_owned() });
                 ui.label(RichText::new(timeout_status).weak().small());
                 Self::keyboard_preview(ui, self.color, self.brightness);
+                ui.add_space(14.0);
+                egui::Frame::new()
+                    .fill(SURFACE)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .corner_radius(8.0)
+                    .inner_margin(12)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("LINUX FIRMWARE-KEY EVENT MAPPINGS").small().strong().color(MUTED));
+                        ui.add_space(6.0);
+                        ui.label("Backlight brightness down / up → KEY_KBDILLUMDOWN / KEY_KBDILLUMUP");
+                        ui.label("Backlight toggle → KEY_KBDILLUMTOGGLE · touchpad toggle → KEY_F21");
+                        ui.label("Lighting-mode event → KEY_LIGHTS_TOGGLE + Meta + Alt + F6 compatibility chord");
+                        ui.label(RichText::new("These are the driver’s event translations, not confirmed Fn-key combinations for every A715-79G firmware revision.").small().weak());
+                    });
             }
             Page::Performance => {
                 ui.label(RichText::new("POWER PROFILES").small().strong().color(MUTED));

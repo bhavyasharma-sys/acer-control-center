@@ -162,12 +162,14 @@ static void acer_acpi_notify(acpi_handle handle, u32 event, void *context)
 {
 	u32 event_value = 0;
 	union acpi_object *out_obj;
+	bool event_valid = false;
 	int status;
 
 	status = acer_acpi_evaluate(handle, 0x01, 0, &out_obj);
 	if (!status) {
 		if (out_obj->type == ACPI_TYPE_INTEGER) {
 			event_value = (u32)out_obj->integer.value;
+			event_valid = true;
 			pr_info("firmware hotkey event: source=ACPI notification=0x%04x code=0x%04x\n",
 				event, event_value);
 		} else {
@@ -176,9 +178,10 @@ static void acer_acpi_notify(acpi_handle handle, u32 event, void *context)
 		ACPI_FREE(out_obj);
 		pr_debug("acer_acpi event: %0#6x, acer event value: %0#6x\n", event, event_value);
 
-		if (!IS_ERR_OR_NULL(acer_acpi_interface.event_callb)) {
-			// Execute registered callback
-			acer_acpi_interface.event_callb(event);
+		if (event_valid && !IS_ERR_OR_NULL(acer_acpi_interface.event_callb)) {
+			/* `event` is the ACPI notification number; the DSM result is
+			 * the Acer hotkey code consumed by the shared keymap. */
+			acer_acpi_interface.event_callb(event_value);
 		}
 	}
 }
