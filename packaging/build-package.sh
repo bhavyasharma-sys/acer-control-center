@@ -46,7 +46,7 @@ cp -a "$ROOT_DIR/gui/resources/." "$STAGE/usr/share/acer-control-center/"
 install -d "$STAGE/usr/src/acer-keyboard-0.1.0"
 cp -a "$ROOT_DIR/driver/Makefile" "$ROOT_DIR/driver/dkms.conf" "$ROOT_DIR/driver/src" "$ROOT_DIR/driver/include" "$STAGE/usr/src/acer-keyboard-0.1.0/"
 
-VERSION="${VERSION:-2.0.0}" \
+VERSION="${VERSION:-2.2.0}" \
 LIB_SUBDIR="$LIB_SUBDIR" \
 nfpm package --config "$ROOT_DIR/packaging/nfpm.yaml" --packager "$FORMAT" --target "$ROOT_DIR/dist"
 
