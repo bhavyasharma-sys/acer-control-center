@@ -7,4 +7,4 @@ package, so the whole frontend runs anywhere Python 3 runs, with nothing to
 compile.
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"

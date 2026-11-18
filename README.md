@@ -4,16 +4,23 @@ Modern Linux control center for supported Acer gaming laptops.
 
 ## Features
 
-- Native Rust interface built with egui/eframe (X11 and Wayland)
-- Dashboard
-- Keyboard RGB control
-- Live keyboard preview
-- System D-Bus daemon
-- DKMS kernel driver
-- Live fan monitoring
-- System and kernel-driver status
-- Manual GitHub release checks from Settings
-- Automatic installation
+- Native desktop app (pygame) with three skins: PredatorSense replica
+  (default), dark left icon rail, and AcerSense-style light mint
+- Six tabs: dashboard with 270-degree gauges, cooling, keyboard RGB,
+  power profiles, battery, settings
+- Per-profile CPU (RAPL PL1 + PL2) and GPU (NVIDIA power limit) watt
+  targets, written only through the D-Bus daemon and verified by
+  hardware read-back; CPU and GPU report success independently
+- Keyboard brightness, colour, breathing animation, idle timeout
+- Fan automatic/maximum control
+- Live telemetry from /proc, /sys, hwmon and nvidia-smi: temperatures,
+  clocks, utilisation, fans (RPM or NVIDIA percent), VRAM, memory,
+  storage, battery
+- System D-Bus daemon (root service; every hardware write goes through it)
+- DKMS kernel driver for the Acer keyboard/EC interface
+- Browser frontend over the same Python backend (no compilation needed)
+- Automatic installation: Rust daemon, C library, DKMS module, udev and
+  D-Bus policy, systemd service, desktop entry
 
 ## Supported Hardware
 
@@ -232,6 +239,59 @@ The test suite drives synthetic mouse and keyboard events through the real
 event path against a fake busctl, and asserts that no card ever overlaps or
 clips on any tab.
 
+`install.sh` also installs a freedesktop `.desktop` entry so the app appears
+in your launcher. A user copy in `~/.local/share/applications/` with the same
+filename overrides the system one - handy to point the launcher at a
+different wrapper (`which -a acer-control-center` lists every installed one).
+
+## Power profiles and hardware limits (configuration)
+
+Every user setting lives in one folder, `~/.config/acer-control-center/`:
+
+| File | Contents |
+| --- | --- |
+| `power-profiles` | one line, seven integers: `p0cpu p0gpu p1cpu p1gpu p2cpu p2gpu selected` |
+| `keyboard-idle-timeout` | seconds of inactivity before the backlight fades; the daemon restores it on activity |
+| `minimize-to-tray` | tray behaviour flag |
+
+`power-profiles` stores the CPU and GPU watt targets of the three profiles
+(0 = Performance, 1 = Balanced, 2 = Battery Saver) plus which one is selected
+(0-2). Defaults: `40 75 30 60 15 30 0`. Each watt field accepts 1-500; a
+missing or malformed file falls back to the defaults. Edit it with any text
+editor, then select that profile in the app and press **Apply** - or use the
+1-500 W steppers and *Save profiles* button on the Performance tab, which
+write the same file.
+
+What **Apply** does per device:
+
+- **CPU** - writes the watts to both RAPL constraints (PL1 and PL2) under
+  `/sys/class/powercap/intel-rapl:0/` and verifies by reading the value back.
+  Firmware sets a hard ceiling; see it with
+  `cat /sys/class/powercap/intel-rapl:0/constraint_0_max_power_uw`
+  (45 W on many Acer laptops). Requests above the ceiling are refused by the
+  kernel and reported as `FAIL: CPU cap not applied: ...`, so the file can
+  hold any number but only firmware-permitted ones stick.
+- **GPU** - sets the NVIDIA power limit via `nvidia-smi` and verifies the
+  software-requested limit by reading it back. Mobile drivers expose an
+  *enforced ceiling* (`enforced.power.limit`) that can sit below the reported
+  maximum; when a request above it is refused with the driver's
+  "not supported in current scope" rejection (which exits 0!), the daemon
+  retries once at the ceiling and reports
+  `requested 75 W, applied 70 W (driver-enforced ceiling)`. Exit-code-only
+  success is never trusted: a table of rejection phrases catches drivers
+  that refuse while exiting 0.
+
+Each device answers with its own `OK:` / `FAIL:` line and its own colour in
+both frontends, so a refused GPU no longer paints a successful CPU write red.
+
+Worth knowing:
+
+- Plug/unplug events can let firmware reprogram RAPL on their own; press
+  Apply again after switching power source if a value looks stale.
+- Nothing else on the system should write these registers. Custom cap
+  scripts, `thermald` or DPTF stacks will fight the daemon - see
+  Troubleshooting below.
+
 ## Browser frontend (no compile needed)
 
 Alongside the native egui application there is a dependency-free browser
@@ -256,6 +316,25 @@ Run the backend tests (they stub `busctl`, so no hardware is needed):
 ```bash
 python3 -m unittest discover -s webgui/tests -v
 ```
+
+## Troubleshooting
+
+- **Daemon offline pill / banner** - `systemctl status
+  acer-control-daemon.service`; re-run `sudo ./install.sh` to restore the
+  service, D-Bus and udev policy files.
+- **Fans read "Not exposed by kernel"** - many Acer laptops expose no hwmon
+  fan inputs; the GPU fan then falls back to the NVIDIA percentage and the
+  CPU row says so honestly instead of guessing.
+- **A power cap reverts a few seconds after Apply** - another writer owns the
+  register (a custom loop service, thermald, DPTF). Name it with
+  `pgrep -af 'cap|thermald|dptf'` and
+  `systemctl list-units --type=service | grep -iE 'acer|thermald|dptf'`,
+  then disable it, or fold its intent into `power-profiles` instead.
+  Watch the register live with
+  `watch -n 2 'grep . /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw'`.
+- **Launcher opens a different build than the terminal** - desktop entries in
+  `~/.local/share/applications/` override system ones; set `Exec=` to the
+  wrapper you want (`which -a acer-control-center` lists them in PATH order).
 
 ## Uninstall
 
